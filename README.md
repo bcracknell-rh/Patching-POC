@@ -83,18 +83,30 @@ ansible-playbook playbooks/05-patching-workflow.yml --ask-vault-pass
 
 
 
-## Vault Variables
+## Credential Variables
 
-Create `inventory/group_vars/vault.yml` with:
+Copy the sample credentials.yml.example to credentials.yml and enter your details:
 
 ```yaml
-vault_rhsm_org_id: "your-org-id"
-vault_rhsm_activation_key: "your-activation-key"
-vault_satellite_admin_password: "your-satellite-password"
-vault_aap_admin_password: "your-aap-password"
-vault_aap_pg_password: "your-postgres-password"
-vault_registry_username: "your-registry-user"
-vault_registry_password: "your-registry-token"
+# Red Hat Subscription Manager
+rhsm_org_id: "CHANGE_ME"
+rhsm_activation_key: "CHANGE_ME"
+
+# AAP 2.7
+aap_admin_password: "CHANGE_ME"
+aap_pg_password: "CHANGE_ME"
+aap_setup_bundle_path: "~/Downloads/ansible-automation-platform-containerized-setup-bundle-2.7-x86_64.tar.gz"
+registry_username: ""
+registry_password: ""
+
+# Satellite 6.19
+satellite_admin_password: "CHANGE_ME"
+satellite_manifest_path: "/tmp/manifest.zip"
+
+# AWS
+aws_key_name: patching-poc
+
+
 ```
 
 
