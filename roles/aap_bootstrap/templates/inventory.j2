@@ -10,16 +10,57 @@
 [automationeda]
 {{ aap_hostname }} ansible_connection=local
 
+[automationmetrics]
+{{ aap_hostname }} ansible_connection=local
+
 [database]
 {{ aap_hostname }} ansible_connection=local
 
 [all:vars]
-admin_password='{{ aap_admin_password }}'
-pg_password='{{ aap_pg_password }}'
 
+# Ansible
+ansible_connection=local
+
+# Common variables
+postgresql_admin_username=postgres
+postgresql_admin_password='{{ aap_pg_password }}'
+
+redis_mode=standalone
+
+{% if registry_username | default("") | length > 0 %}
 registry_url='registry.redhat.io'
-registry_username='{{ registry_username | default("") }}'
-registry_password='{{ registry_password | default("") }}'
+registry_username='{{ registry_username }}'
+registry_password='{{ registry_password }}'
+{% endif %}
 
+# Platform gateway
+gateway_admin_password='{{ aap_admin_password }}'
+gateway_pg_host='{{ aap_hostname }}'
+gateway_pg_password='{{ aap_pg_password }}'
+
+# Automation controller
+controller_admin_password='{{ aap_admin_password }}'
+controller_pg_host='{{ aap_hostname }}'
+controller_pg_password='{{ aap_pg_password }}'
+controller_percent_memory_capacity=0.5
+
+# Automation hub
+hub_admin_password='{{ aap_admin_password }}'
+hub_pg_host='{{ aap_hostname }}'
+hub_pg_password='{{ aap_pg_password }}'
+hub_seed_collections=false
+
+# Event-Driven Ansible controller
+eda_admin_password='{{ aap_admin_password }}'
+eda_pg_host='{{ aap_hostname }}'
+eda_pg_password='{{ aap_pg_password }}'
+
+# Automation metrics service
+automationmetrics_pg_host='{{ aap_hostname }}'
+automationmetrics_pg_password='{{ aap_pg_password }}'
+automationmetrics_controller_read_pg_host='{{ aap_hostname }}'
+automationmetrics_controller_read_pg_password='{{ aap_pg_password }}'
+
+# Bundle install (disconnected)
 bundle_install=true
-bundle_dir='{{ aap_installer_dir }}'
+bundle_dir='{{ aap_installer_dir }}/bundle'

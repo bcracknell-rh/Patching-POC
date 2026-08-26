@@ -57,6 +57,13 @@
   ansible.builtin.hostname:
     name: "{{ aap_hostname }}"
 
+- name: Add hostname to /etc/hosts for loopback resolution
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ aap_hostname }}$'
+    line: "127.0.0.1 {{ aap_hostname }}"
+    state: present
+
 - name: Create installation directory
   ansible.builtin.file:
     path: /opt/aap-installer
@@ -94,12 +101,23 @@
   ansible.builtin.template:
     src: inventory.j2
     dest: "{{ aap_installer_dir }}/inventory"
+    owner: ec2-user
+    group: ec2-user
     mode: "0600"
+
+- name: Set ownership of installer directory to ec2-user
+  ansible.builtin.file:
+    path: "{{ aap_installer_dir }}"
+    owner: ec2-user
+    group: ec2-user
+    recurse: true
 
 - name: Run AAP 2.7 containerized installer
   ansible.builtin.command:
     cmd: ansible-playbook -i inventory ansible.containerized_installer.install
     chdir: "{{ aap_installer_dir }}"
+  become: true
+  become_user: ec2-user
   register: aap_install
   async: 3600
   poll: 60
