@@ -41,9 +41,9 @@ project is pre-configured to use Automation Hub as the primary source.
 
 1. Go to [console.redhat.com/ansible/automation-hub/token](https://console.redhat.com/ansible/automation-hub/token/)
 2. Click **Load Token** and copy the generated token
-3. Replace `<your_automation_hub_token>` in `ansible.cfg` with your token
+3. Place the token in the `credentials.yml` file for variable `automation_hub_token`
 
-Alternatively, set the environment variable:
+Also, set the environment variable:
 
 ```bash
 export ANSIBLE_GALAXY_SERVER_AUTOMATION_HUB_TOKEN="your-token-here"
