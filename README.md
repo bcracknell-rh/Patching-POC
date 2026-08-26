@@ -29,7 +29,7 @@ Desktop (Ansible) --> AAP 2.7 (RHEL 10.2, m5.xlarge)
 - Ansible Core 2.16+ installed locally
 - Vault password file for encrypted credentials
 - Red Hat Automation Hub API token (see below)
-- Download the latest AAP bundle here: [https://access.redhat.com/downloads/content/480/ver=2.7/rhel---10/2.7/x86_64/product-software](https://access.redhat.com/downloads/content/480/ver=2.7/rhel---10/2.7/x86_64/product-software) and set its location in `roles/aap_bootstrap/defaults/main.yml`
+- Download the latest AAP bundle here: [https://access.redhat.com/downloads/content/480/ver=2.7/rhel---10/2.7/x86_64/product-software](https://access.redhat.com/downloads/content/480/ver=2.7/rhel---10/2.7/x86_64/product-software) and set its location in `credentials.yml`
 
 
 
