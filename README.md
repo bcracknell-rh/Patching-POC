@@ -50,7 +50,6 @@ export ANSIBLE_GALAXY_SERVER_AUTOMATION_HUB_TOKEN="your-token-here"
 ```
 
 
-
 ## Quick Start
 
 ```bash
@@ -62,23 +61,20 @@ export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_DEFAULT_REGION="ap-southeast-2"
 
-# Create vault for secrets
-ansible-vault create inventory/group_vars/vault.yml
-
 # Phase 1: Deploy AAP Controller
-ansible-playbook playbooks/01-deploy-aap.yml --ask-vault-pass
+ansible-playbook playbooks/01-deploy-aap.yml
 
 # Phase 2: Deploy Satellite (run from AAP or locally)
-ansible-playbook playbooks/02-deploy-satellite.yml --ask-vault-pass
+ansible-playbook playbooks/02-deploy-satellite.yml
 
 # Phase 3: Configure Satellite content
-ansible-playbook playbooks/03-configure-satellite.yml --ask-vault-pass
+ansible-playbook playbooks/03-configure-satellite.yml
 
 # Phase 4: Provision RHEL 10.2 VMs
-ansible-playbook playbooks/04-provision-vms.yml --ask-vault-pass
+ansible-playbook playbooks/04-provision-vms.yml
 
 # Phase 5: Configure AAP Workflow
-ansible-playbook playbooks/05-patching-workflow.yml --ask-vault-pass
+ansible-playbook playbooks/05-patching-workflow.yml
 ```
 
 
