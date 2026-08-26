@@ -1,0 +1,33 @@
+---
+# Promote Content View version to target lifecycle environment
+- name: Promote Content View
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  module_defaults:
+    group/redhat.satellite.foreman:
+      server_url: "{{ satellite_server_url }}"
+      username: "{{ satellite_username }}"
+      password: "{{ satellite_password }}"
+      validate_certs: false
+
+  vars:
+    prior_environments:
+      Dev: Library
+      QA: Dev
+      Prod: QA
+
+  tasks:
+    - name: Promote latest Content View version to {{ target_environment }}
+      redhat.satellite.content_view_version:
+        content_view: "{{ content_view_name }}"
+        organization: "{{ satellite_organization }}"
+        current_lifecycle_environment: "{{ prior_environments[target_environment] }}"
+        lifecycle_environments:
+          - "{{ target_environment }}"
+        state: present
+
+    - name: Display promotion result
+      ansible.builtin.debug:
+        msg: "Promoted {{ content_view_name }} to {{ target_environment }}"

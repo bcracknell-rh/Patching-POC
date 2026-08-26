@@ -1,0 +1,103 @@
+---
+# Phase 2: Deploy Satellite 6.19 on AWS EC2
+# Designed to be imported into AAP as a Job Template
+- name: Provision Satellite 6.19 EC2 instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - vars/aws_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/satellite.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: Find latest RHEL 9 AMI for Satellite
+      amazon.aws.ec2_ami_info:
+        region: "{{ aws_region }}"
+        owners:
+          - "{{ satellite_ami_owner }}"
+        filters:
+          name: "{{ satellite_ami_filter }}"
+          architecture: x86_64
+      register: satellite_amis
+
+    - name: Set latest RHEL 9 AMI fact
+      ansible.builtin.set_fact:
+        satellite_ami_id: "{{ (satellite_amis.images | sort(attribute='creation_date') | last).image_id }}"
+
+    - name: Create Satellite security group
+      amazon.aws.ec2_security_group:
+        name: patching-poc-satellite-sg
+        description: Security group for Satellite 6.19
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules: "{{ satellite_security_group_rules }}"
+        tags: "{{ aws_tags }}"
+        state: present
+      register: satellite_sg
+
+    - name: Launch Satellite EC2 instance
+      amazon.aws.ec2_instance:
+        name: patching-poc-satellite
+        key_name: "{{ aws_key_name }}"
+        instance_type: "{{ satellite_instance_type }}"
+        image_id: "{{ satellite_ami_id }}"
+        region: "{{ aws_region }}"
+        vpc_subnet_id: "{{ subnet_id }}"
+        security_group: "{{ satellite_sg.group_id }}"
+        network:
+          assign_public_ip: true
+        volumes:
+          - device_name: /dev/sda1
+            ebs:
+              volume_size: "{{ satellite_root_volume_size }}"
+              volume_type: gp3
+              delete_on_termination: true
+          - device_name: /dev/sdb
+            ebs:
+              volume_size: "{{ satellite_data_volume_size }}"
+              volume_type: gp3
+              delete_on_termination: true
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-satellite', 'Role': 'satellite', 'Environment': 'management'}) }}"
+        wait: true
+        state: running
+      register: satellite_instance
+
+    - name: Wait for SSH to be available
+      ansible.builtin.wait_for:
+        host: "{{ satellite_instance.instances[0].public_ip_address }}"
+        port: 22
+        delay: 30
+        timeout: 300
+
+    - name: Add Satellite host to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ satellite_instance.instances[0].public_ip_address }}"
+        groups: satellite
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+
+    - name: Save Satellite instance details
+      ansible.builtin.copy:
+        content: |
+          ---
+          satellite_instance_id: "{{ satellite_instance.instances[0].instance_id }}"
+          satellite_public_ip: "{{ satellite_instance.instances[0].public_ip_address }}"
+          satellite_private_ip: "{{ satellite_instance.instances[0].private_ip_address }}"
+        dest: "{{ playbook_dir }}/vars/satellite_resources.yml"
+
+- name: Install and configure Satellite 6.19
+  hosts: satellite
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/satellite.yml
+    - ../credentials.yml
+
+  roles:
+    - role: satellite_deploy

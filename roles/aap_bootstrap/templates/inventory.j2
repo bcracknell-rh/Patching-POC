@@ -1,0 +1,24 @@
+[automationgateway]
+{{ aap_hostname }} ansible_connection=local
+
+[automationcontroller]
+{{ aap_hostname }} ansible_connection=local
+
+[automationhub]
+{{ aap_hostname }} ansible_connection=local
+
+[automationeda]
+{{ aap_hostname }} ansible_connection=local
+
+[database]
+{{ aap_hostname }} ansible_connection=local
+
+[all:vars]
+admin_password='{{ aap_admin_password }}'
+pg_password='{{ aap_pg_password }}'
+
+registry_url='registry.redhat.io'
+registry_username='{{ registry_username | default("") }}'
+registry_password='{{ registry_password | default("") }}'
+
+bundle_install=true

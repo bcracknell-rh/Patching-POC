@@ -1,0 +1,144 @@
+---
+# Phase 4: Provision RHEL 10.2 VMs and register to Satellite
+# Deploys 3 VMs into Dev, QA, and Prod lifecycle environments
+- name: Provision RHEL 10.2 VMs in AWS
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - vars/aws_resources.yml
+    - vars/satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../credentials.yml
+
+  vars:
+    rhel10_ami_owner: "309956199498"
+    rhel10_ami_filter: "RHEL-10.2*_HVM-*-x86_64-*-Access2-*"
+    vm_instance_type: t3.medium
+    vm_volume_size: 30
+
+    patching_vms:
+      - name: rhel10-dev
+        environment: Dev
+        activation_key: ak-rhel10-dev
+      - name: rhel10-qa
+        environment: QA
+        activation_key: ak-rhel10-qa
+      - name: rhel10-prod
+        environment: Prod
+        activation_key: ak-rhel10-prod
+
+  tasks:
+    - name: Create VM security group
+      amazon.aws.ec2_security_group:
+        name: patching-poc-vm-sg
+        description: Security group for RHEL 10 patching VMs
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules: "{{ vm_security_group_rules }}"
+        tags: "{{ aws_tags }}"
+        state: present
+      register: vm_sg
+
+    - name: Find latest RHEL 10.2 AMI
+      amazon.aws.ec2_ami_info:
+        region: "{{ aws_region }}"
+        owners:
+          - "{{ rhel10_ami_owner }}"
+        filters:
+          name: "{{ rhel10_ami_filter }}"
+          architecture: x86_64
+      register: rhel10_amis
+
+    - name: Set latest RHEL 10.2 AMI fact
+      ansible.builtin.set_fact:
+        rhel10_ami_id: "{{ (rhel10_amis.images | sort(attribute='creation_date') | last).image_id }}"
+
+    - name: Launch RHEL 10.2 VMs
+      amazon.aws.ec2_instance:
+        name: "patching-poc-{{ item.name }}"
+        key_name: "{{ aws_key_name }}"
+        instance_type: "{{ vm_instance_type }}"
+        image_id: "{{ rhel10_ami_id }}"
+        region: "{{ aws_region }}"
+        vpc_subnet_id: "{{ subnet_id }}"
+        security_group: "{{ vm_sg.group_id }}"
+        network:
+          assign_public_ip: true
+        volumes:
+          - device_name: /dev/sda1
+            ebs:
+              volume_size: "{{ vm_volume_size }}"
+              volume_type: gp3
+              delete_on_termination: true
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-' + item.name, 'Role': 'managed_host', 'Environment': item.environment}) }}"
+        user_data: |
+          #!/bin/bash
+          hostnamectl set-hostname {{ item.name }}.{{ satellite_domain }}
+        wait: true
+        state: running
+      loop: "{{ patching_vms }}"
+      register: vm_instances
+
+    - name: Wait for SSH on all VMs
+      ansible.builtin.wait_for:
+        host: "{{ item.instances[0].public_ip_address }}"
+        port: 22
+        delay: 30
+        timeout: 300
+      loop: "{{ vm_instances.results }}"
+
+    - name: Add VMs to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ item.item.name }}"
+        ansible_host: "{{ item.instances[0].public_ip_address }}"
+        groups: patching_vms
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+        activation_key: "{{ item.item.activation_key }}"
+        vm_environment: "{{ item.item.environment }}"
+      loop: "{{ vm_instances.results }}"
+
+- name: Register RHEL 10.2 VMs with Satellite
+  hosts: patching_vms
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+
+  vars:
+    satellite_server_url: "https://{{ satellite_private_ip }}"
+
+  tasks:
+    - name: Install Satellite CA certificate
+      ansible.builtin.command:
+        cmd: "rpm -ivh https://{{ satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
+        creates: /etc/rhsm/ca/katello-server-ca.pem
+
+    - name: Register with Satellite using activation key
+      community.general.redhat_subscription:
+        server_hostname: "{{ satellite_private_ip }}"
+        org_id: "{{ satellite_organization }}"
+        activationkey: "{{ activation_key }}"
+        state: present
+
+    - name: Install katello-host-tools for errata reporting
+      ansible.builtin.dnf:
+        name:
+          - katello-host-tools
+          - katello-host-tools-tracer
+        state: present
+
+    - name: Enable and start remote execution (SSH)
+      ansible.builtin.authorized_key:
+        user: root
+        state: present
+        key: "{{ lookup('url', satellite_server_url + '/ssh/pubkey', validate_certs=false) }}"
+
+    - name: Run initial package profile upload
+      ansible.builtin.command:
+        cmd: katello-package-upload
+      changed_when: true

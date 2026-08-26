@@ -1,0 +1,115 @@
+---
+- name: Create Lifecycle Environments
+  redhat.satellite.lifecycle_environment:
+    name: "{{ item.name }}"
+    prior: "{{ item.prior }}"
+    description: "{{ item.description }}"
+    organization: "{{ satellite_organization }}"
+    state: present
+  loop: "{{ satellite_lifecycle_environments }}"
+
+- name: Enable RHEL 10 BaseOS repository
+  redhat.satellite.repository_set:
+    name: "Red Hat Enterprise Linux 10 for x86_64 - BaseOS (RPMs)"
+    organization: "{{ satellite_organization }}"
+    product: "Red Hat Enterprise Linux for x86_64"
+    repositories:
+      - releasever: "10"
+        basearch: x86_64
+    state: enabled
+
+- name: Enable RHEL 10 AppStream repository
+  redhat.satellite.repository_set:
+    name: "Red Hat Enterprise Linux 10 for x86_64 - AppStream (RPMs)"
+    organization: "{{ satellite_organization }}"
+    product: "Red Hat Enterprise Linux for x86_64"
+    repositories:
+      - releasever: "10"
+        basearch: x86_64
+    state: enabled
+
+- name: Set download policy to on_demand for BaseOS
+  redhat.satellite.repository:
+    name: "Red Hat Enterprise Linux 10 for x86_64 - BaseOS RPMs 10"
+    product: "Red Hat Enterprise Linux for x86_64"
+    organization: "{{ satellite_organization }}"
+    download_policy: on_demand
+    state: present
+
+- name: Set download policy to on_demand for AppStream
+  redhat.satellite.repository:
+    name: "Red Hat Enterprise Linux 10 for x86_64 - AppStream RPMs 10"
+    product: "Red Hat Enterprise Linux for x86_64"
+    organization: "{{ satellite_organization }}"
+    download_policy: on_demand
+    state: present
+
+- name: Sync RHEL 10 repositories
+  redhat.satellite.repository_sync:
+    product: "Red Hat Enterprise Linux for x86_64"
+    organization: "{{ satellite_organization }}"
+  async: 7200
+  poll: 60
+
+- name: Create RHEL10 Content View
+  redhat.satellite.content_view:
+    name: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    repositories: "{{ satellite_content_view_repos }}"
+    state: present
+
+- name: Publish initial Content View version
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    description: "Initial publish for Patching POC"
+    state: present
+
+- name: Promote Content View to Dev
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    current_lifecycle_environment: Library
+    lifecycle_environments:
+      - Dev
+    state: present
+
+- name: Promote Content View to QA
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    current_lifecycle_environment: Dev
+    lifecycle_environments:
+      - QA
+    state: present
+
+- name: Promote Content View to Prod
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    current_lifecycle_environment: QA
+    lifecycle_environments:
+      - Prod
+    state: present
+
+- name: Create Activation Keys
+  redhat.satellite.activation_key:
+    name: "{{ item.name }}"
+    organization: "{{ satellite_organization }}"
+    lifecycle_environment: "{{ item.lifecycle_environment }}"
+    content_view: "{{ item.content_view }}"
+    release_version: "{{ item.release_version }}"
+    auto_attach: "{{ item.auto_attach }}"
+    state: present
+  loop: "{{ satellite_activation_keys }}"
+
+- name: Create Host Groups
+  redhat.satellite.hostgroup:
+    name: "{{ item.name }}"
+    organization: "{{ satellite_organization }}"
+    lifecycle_environment: "{{ item.lifecycle_environment }}"
+    content_view: "{{ item.content_view }}"
+    locations:
+      - "{{ satellite_location }}"
+    state: present
+  loop: "{{ satellite_hostgroups }}"

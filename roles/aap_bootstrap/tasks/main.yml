@@ -1,0 +1,115 @@
+---
+- name: Register system with Red Hat
+  community.general.redhat_subscription:
+    org_id: "{{ rhsm_org_id }}"
+    activationkey: "{{ rhsm_activation_key }}"
+    state: present
+
+- name: Set release version for EUS repos
+  ansible.builtin.command:
+    cmd: subscription-manager release --set=10.2
+  changed_when: true
+
+- name: Refresh subscription data
+  ansible.builtin.command:
+    cmd: subscription-manager refresh
+  changed_when: true
+
+- name: Enable required repositories for AAP 2.7
+  community.general.rhsm_repository:
+    name: "{{ aap_repos }}"
+    state: enabled
+    purge: true
+
+- name: Clean dnf cache
+  ansible.builtin.command:
+    cmd: dnf clean all
+  changed_when: true
+
+- name: Install prerequisite packages for containerized AAP
+  ansible.builtin.dnf:
+    name:
+      - ansible-core
+      - python3-pip
+      - podman
+      - firewalld
+      - wget
+    state: present
+
+- name: Start and enable firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Open firewall ports for AAP
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop:
+    - 80/tcp
+    - 443/tcp
+    - 27199/tcp
+
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ aap_hostname }}"
+
+- name: Create installation directory
+  ansible.builtin.file:
+    path: /opt/aap-installer
+    state: directory
+    mode: "0755"
+
+- name: Copy AAP 2.7 setup bundle to host
+  ansible.builtin.copy:
+    src: "{{ aap_setup_bundle_path }}"
+    dest: "/opt/aap-installer/{{ aap_setup_bundle_path | basename }}"
+    mode: "0644"
+  when: aap_setup_bundle_path is defined
+
+- name: Extract AAP 2.7 setup bundle
+  ansible.builtin.unarchive:
+    src: "/opt/aap-installer/{{ aap_setup_bundle_path | basename }}"
+    dest: /opt/aap-installer
+    remote_src: true
+    creates: /opt/aap-installer/ansible-automation-platform-containerized-setup-bundle-2.7
+  when: aap_setup_bundle_path is defined
+
+- name: Find extracted installer directory
+  ansible.builtin.find:
+    paths: /opt/aap-installer
+    patterns: "ansible-automation-platform-containerized-setup*"
+    file_type: directory
+  register: installer_dirs
+
+- name: Set installer directory fact
+  ansible.builtin.set_fact:
+    aap_installer_dir: "{{ (installer_dirs.files | sort(attribute='path') | last).path }}"
+  when: installer_dirs.files | length > 0
+
+- name: Template AAP installer inventory
+  ansible.builtin.template:
+    src: inventory.j2
+    dest: "{{ aap_installer_dir }}/inventory"
+    mode: "0600"
+
+- name: Run AAP 2.7 containerized installer
+  ansible.builtin.command:
+    cmd: ansible-playbook -i inventory ansible.containerized_installer.install
+    chdir: "{{ aap_installer_dir }}"
+  register: aap_install
+  async: 3600
+  poll: 60
+
+- name: Wait for AAP Controller to be accessible
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}/api/gateway/v1/ping/"
+    validate_certs: false
+    status_code: 200
+  register: aap_ping
+  retries: 30
+  delay: 10
+  until: aap_ping.status == 200

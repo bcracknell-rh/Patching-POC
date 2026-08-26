@@ -1,0 +1,16 @@
+---
+satellite_instance_type: m5.2xlarge
+satellite_root_volume_size: 100
+satellite_data_volume_size: 500
+satellite_ami_filter: "RHEL-9*_HVM-*-x86_64-*-Access2-*"
+satellite_ami_owner: "309956199498"
+
+satellite_version: "6.19"
+satellite_repos:
+  - rhel-9-for-x86_64-baseos-eus-rpms
+  - rhel-9-for-x86_64-appstream-eus-rpms
+  - satellite-6.19-for-rhel-9-x86_64-rpms
+  - satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
+
+satellite_organization: "Patching-POC"
+satellite_location: "AWS"

@@ -1,0 +1,26 @@
+---
+plugin: amazon.aws.aws_ec2
+regions:
+  - "{{ aws_region | default('ap-southeast-2') }}"
+
+filters:
+  tag:Project:
+    - patching-poc
+  instance-state-name:
+    - running
+
+keyed_groups:
+  - key: tags.Role
+    prefix: role
+    separator: "_"
+  - key: tags.Environment
+    prefix: env
+    separator: "_"
+
+hostnames:
+  - tag:Name
+  - private-ip-address
+
+compose:
+  ansible_host: public_ip_address
+  ansible_user: "'ec2-user'"

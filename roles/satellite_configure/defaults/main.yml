@@ -1,0 +1,67 @@
+---
+satellite_organization: "Patching-POC"
+satellite_location: "AWS"
+
+satellite_lifecycle_environments:
+  - name: Dev
+    prior: Library
+    description: Development environment for initial patch testing
+  - name: QA
+    prior: Dev
+    description: Quality Assurance environment for validation
+  - name: Prod
+    prior: QA
+    description: Production environment
+
+satellite_products:
+  - name: Red Hat Enterprise Linux for x86_64
+
+satellite_repositories:
+  - name: Red Hat Enterprise Linux 10 for x86_64 - BaseOS RPMs 10
+    product: Red Hat Enterprise Linux for x86_64
+    content_type: yum
+    basearch: x86_64
+    releasever: "10"
+  - name: Red Hat Enterprise Linux 10 for x86_64 - AppStream RPMs 10
+    product: Red Hat Enterprise Linux for x86_64
+    content_type: yum
+    basearch: x86_64
+    releasever: "10"
+
+satellite_content_view_name: "RHEL10"
+satellite_content_view_repos:
+  - name: Red Hat Enterprise Linux 10 for x86_64 - BaseOS RPMs 10
+    product: Red Hat Enterprise Linux for x86_64
+  - name: Red Hat Enterprise Linux 10 for x86_64 - AppStream RPMs 10
+    product: Red Hat Enterprise Linux for x86_64
+
+satellite_activation_keys:
+  - name: ak-rhel10-dev
+    lifecycle_environment: Dev
+    content_view: RHEL10
+    release_version: "10"
+    auto_attach: true
+  - name: ak-rhel10-qa
+    lifecycle_environment: QA
+    content_view: RHEL10
+    release_version: "10"
+    auto_attach: true
+  - name: ak-rhel10-prod
+    lifecycle_environment: Prod
+    content_view: RHEL10
+    release_version: "10"
+    auto_attach: true
+
+satellite_hostgroups:
+  - name: "RHEL10/Dev"
+    lifecycle_environment: Dev
+    content_view: RHEL10
+    activation_keys: ak-rhel10-dev
+  - name: "RHEL10/QA"
+    lifecycle_environment: QA
+    content_view: RHEL10
+    activation_keys: ak-rhel10-qa
+  - name: "RHEL10/Prod"
+    lifecycle_environment: Prod
+    content_view: RHEL10
+    activation_keys: ak-rhel10-prod

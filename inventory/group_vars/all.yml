@@ -1,0 +1,12 @@
+---
+aws_region: ap-southeast-2
+aws_vpc_cidr: 10.0.0.0/16
+aws_subnet_cidr: 10.0.1.0/24
+aws_project_tag: patching-poc
+
+satellite_hostname: satellite.patching-poc.internal
+satellite_domain: patching-poc.internal
+satellite_admin_user: admin
+
+aap_hostname: aap.patching-poc.internal
+aap_admin_user: admin

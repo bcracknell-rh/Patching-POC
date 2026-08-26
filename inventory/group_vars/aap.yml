@@ -1,0 +1,11 @@
+---
+aap_instance_type: m5.xlarge
+aap_root_volume_size: 100
+aap_ami_filter: "RHEL-10.2*_HVM-*-x86_64-*-Access2-*"
+aap_ami_owner: "309956199498"
+
+aap_version: "2.7"
+aap_repos:
+  - rhel-10-for-x86_64-baseos-eus-rpms
+  - rhel-10-for-x86_64-appstream-eus-rpms
+  - ansible-automation-platform-2.7-for-rhel-10-x86_64-rpms

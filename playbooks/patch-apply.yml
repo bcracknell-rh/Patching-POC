@@ -1,0 +1,53 @@
+---
+# Apply available errata to hosts in the target lifecycle environment
+- name: Apply Errata to Managed Hosts
+  hosts: all
+  become: true
+  serial: 1
+
+  tasks:
+    - name: Check for available errata
+      ansible.builtin.command:
+        cmd: dnf updateinfo list --available
+      register: available_errata
+      changed_when: false
+
+    - name: Display available errata count
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} has {{ available_errata.stdout_lines | select('match', '^RH') | list | length }} applicable errata"
+
+    - name: Apply all available errata
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+        update_only: true
+        security: false
+      register: patch_result
+
+    - name: Display patch results
+      ansible.builtin.debug:
+        msg: "Updated {{ patch_result.results | default([]) | length }} packages on {{ inventory_hostname }}"
+      when: patch_result is changed
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Check needs-restarting
+      ansible.builtin.command:
+        cmd: needs-restarting -r
+      register: needs_restart
+      failed_when: false
+      changed_when: false
+
+    - name: Reboot if required
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        msg: "Rebooting after patching"
+      when: needs_restart.rc == 1
+
+    - name: Upload updated package profile to Satellite
+      ansible.builtin.command:
+        cmd: katello-package-upload
+      changed_when: true

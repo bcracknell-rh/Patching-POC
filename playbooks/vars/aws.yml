@@ -1,0 +1,71 @@
+---
+aws_region: ap-southeast-2
+aws_vpc_cidr: 10.0.0.0/16
+aws_subnet_cidr: 10.0.1.0/24
+aws_availability_zone: ap-southeast-2a
+aws_key_name: patching-poc
+
+aws_tags:
+  Project: patching-poc
+  ManagedBy: ansible
+
+aap_security_group_rules:
+  - proto: tcp
+    from_port: 22
+    to_port: 22
+    cidr_ip: 0.0.0.0/0
+    rule_desc: SSH
+  - proto: tcp
+    from_port: 443
+    to_port: 443
+    cidr_ip: 0.0.0.0/0
+    rule_desc: HTTPS
+  - proto: tcp
+    from_port: 27199
+    to_port: 27199
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Receptor
+
+satellite_security_group_rules:
+  - proto: tcp
+    from_port: 22
+    to_port: 22
+    cidr_ip: 0.0.0.0/0
+    rule_desc: SSH
+  - proto: tcp
+    from_port: 443
+    to_port: 443
+    cidr_ip: 0.0.0.0/0
+    rule_desc: HTTPS
+  - proto: tcp
+    from_port: 5647
+    to_port: 5647
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Katello Agent
+  - proto: tcp
+    from_port: 8000
+    to_port: 8000
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Provisioning
+  - proto: tcp
+    from_port: 8140
+    to_port: 8140
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Puppet
+  - proto: tcp
+    from_port: 9090
+    to_port: 9090
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Smart Proxy
+
+vm_security_group_rules:
+  - proto: tcp
+    from_port: 22
+    to_port: 22
+    cidr_ip: 0.0.0.0/0
+    rule_desc: SSH
+  - proto: tcp
+    from_port: 443
+    to_port: 443
+    cidr_ip: 10.0.0.0/16
+    rule_desc: HTTPS internal

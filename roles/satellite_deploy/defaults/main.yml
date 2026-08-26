@@ -1,0 +1,6 @@
+---
+satellite_version: "6.19"
+satellite_organization: "Patching-POC"
+satellite_location: "AWS"
+satellite_data_device: /dev/nvme1n1
+satellite_data_mount: /var/lib/pulp

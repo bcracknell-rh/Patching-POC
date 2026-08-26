@@ -1,0 +1,33 @@
+---
+# Publish a new Content View version (used by AAP Job Template)
+- name: Publish Content View
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  module_defaults:
+    group/redhat.satellite.foreman:
+      server_url: "{{ satellite_server_url }}"
+      username: "{{ satellite_username }}"
+      password: "{{ satellite_password }}"
+      validate_certs: false
+
+  tasks:
+    - name: Sync RHEL 10 repositories before publish
+      redhat.satellite.repository_sync:
+        product: "Red Hat Enterprise Linux for x86_64"
+        organization: "{{ satellite_organization }}"
+      async: 3600
+      poll: 30
+
+    - name: Publish new Content View version
+      redhat.satellite.content_view_version:
+        content_view: "{{ content_view_name }}"
+        organization: "{{ satellite_organization }}"
+        description: "Patch cycle - {{ ansible_date_time.date | default(lookup('pipe', 'date +%Y-%m-%d')) }}"
+        state: present
+      register: cv_publish
+
+    - name: Display published version info
+      ansible.builtin.debug:
+        msg: "Published {{ content_view_name }} - new version available in Library"

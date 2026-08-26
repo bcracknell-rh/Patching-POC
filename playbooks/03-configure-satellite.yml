@@ -1,0 +1,25 @@
+---
+# Phase 3: Configure Satellite Content Management
+# Configures RHEL 10 repos, Content View, Lifecycle Environments, Activation Keys
+- name: Configure Satellite 6.19 Content for RHEL 10
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - ../inventory/group_vars/all.yml
+    - ../credentials.yml
+
+  module_defaults:
+    group/redhat.satellite.foreman:
+      server_url: "https://{{ satellite_public_ip | default(satellite_hostname) }}"
+      username: "{{ satellite_admin_user }}"
+      password: "{{ satellite_admin_password }}"
+      validate_certs: false
+
+  vars:
+    satellite_public_ip: "{{ lookup('file', playbook_dir + '/vars/satellite_resources.yml') | from_yaml | json_query('satellite_public_ip') }}"
+
+  roles:
+    - role: satellite_configure

@@ -1,0 +1,60 @@
+---
+# Validate hosts after patching - basic health checks
+- name: Validate Patched Hosts
+  hosts: all
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Verify system is running expected RHEL version
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "RedHat"
+          - ansible_distribution_major_version == "10"
+        fail_msg: "Host {{ inventory_hostname }} is not running RHEL 10"
+        success_msg: "Host {{ inventory_hostname }} confirmed running RHEL {{ ansible_distribution_version }}"
+
+    - name: Check for remaining applicable security errata
+      ansible.builtin.command:
+        cmd: dnf updateinfo list --available --security
+      register: remaining_security
+      changed_when: false
+
+    - name: Report remaining security errata
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ remaining_security.stdout_lines | select('match', '^RH') | list | length }} security errata remaining"
+
+    - name: Verify critical services are running
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+      register: service_status
+      loop:
+        - sshd
+        - chronyd
+        - NetworkManager
+      failed_when: service_status.status.ActiveState != "active"
+
+    - name: Check disk space (fail if root > 90%)
+      ansible.builtin.assert:
+        that:
+          - (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_available > (ansible_mounts | selectattr('mount', 'equalto', '/') | first).size_total * 0.1
+        fail_msg: "Root filesystem on {{ inventory_hostname }} is above 90% usage"
+        success_msg: "Disk space OK on {{ inventory_hostname }}"
+
+    - name: Verify connectivity to Satellite
+      ansible.builtin.uri:
+        url: "https://{{ satellite_private_ip | default(groups['satellite'][0]) }}/rhsm"
+        validate_certs: false
+        status_code: 200
+      register: sat_connectivity
+      failed_when: sat_connectivity.status != 200
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >
+          VALIDATION PASSED for {{ inventory_hostname }}:
+          - RHEL {{ ansible_distribution_version }}
+          - {{ remaining_security.stdout_lines | select('match', '^RH') | list | length }} remaining security errata
+          - All critical services running
+          - Disk space OK
+          - Satellite connectivity OK

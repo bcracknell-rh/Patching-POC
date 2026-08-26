@@ -1,0 +1,18 @@
+plans/
+
+# Ansible
+collections/
+*.retry
+
+# Vault
+**/vault.yml
+
+# Personal credentials (use credentials.yml.example as template)
+credentials.yml
+
+# Generated resource files (contain instance IDs/IPs)
+playbooks/vars/aws_resources.yml
+playbooks/vars/satellite_resources.yml
+
+# SSH keys
+*.pem
