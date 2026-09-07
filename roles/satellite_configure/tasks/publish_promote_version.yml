@@ -1,7 +1,19 @@
 ---
-- name: "Get existing CV versions for {{ satellite_content_view_name }}"
+- name: "Look up Content View ID for {{ satellite_content_view_name }}"
   ansible.builtin.uri:
-    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_view_versions?search=content_view_name={{ satellite_content_view_name | urlencode }}&per_page=100"
+    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_views?name={{ satellite_content_view_name | urlencode }}&per_page=1"
+    method: GET
+    user: "{{ satellite_admin_user }}"
+    password: "{{ satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: cv_lookup
+  changed_when: false
+
+- name: "Get existing CV versions by content_view_id"
+  ansible.builtin.uri:
+    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_view_versions?content_view_id={{ cv_lookup.json.results[0].id }}&per_page=100"
     method: GET
     user: "{{ satellite_admin_user }}"
     password: "{{ satellite_admin_password }}"
@@ -11,18 +23,18 @@
   register: existing_cv_versions
   changed_when: false
 
+- name: "Debug - show existing CV version descriptions"
+  ansible.builtin.debug:
+    msg: "Found {{ existing_cv_versions.json.results | length }} versions: {{ existing_cv_versions.json.results | map(attribute='description') | list }}"
+
 - name: "Check if version already exists - {{ cv_version.description }}"
   ansible.builtin.set_fact:
-    cv_version_already_exists: >-
-      {{ existing_cv_versions.json.results
-         | selectattr('description', 'defined')
-         | selectattr('description', 'equalto', cv_version.description)
-         | list | length > 0 }}
+    cv_version_already_exists: "{{ existing_cv_versions.json.results | selectattr('description', 'defined') | selectattr('description', 'equalto', cv_version.description) | list | length > 0 }}"
 
 - name: "Skip - CV version already exists: {{ cv_version.description }}"
   ansible.builtin.debug:
     msg: "CV version '{{ cv_version.description }}' already exists, skipping publish and promote"
-  when: cv_version_already_exists
+  when: cv_version_already_exists | bool
 
 - name: "Set errata filter rule to {{ cv_version.errata_end_date }}"
   redhat.satellite.content_view_filter_rule:
@@ -36,7 +48,7 @@
       - security
       - enhancement
     state: present
-  when: not cv_version_already_exists
+  when: not (cv_version_already_exists | bool)
 
 - name: "Publish CV version - {{ cv_version.description }}"
   redhat.satellite.content_view_version:
@@ -44,7 +56,7 @@
     organization: "{{ satellite_organization }}"
     description: "{{ cv_version.description }}"
     state: present
-  when: not cv_version_already_exists
+  when: not (cv_version_already_exists | bool)
 
 - name: "Promote CV to {{ item }}"
   redhat.satellite.content_view_version:
@@ -57,4 +69,4 @@
   loop: "{{ cv_version.promote_to }}"
   loop_control:
     index_var: idx
-  when: not cv_version_already_exists
+  when: not (cv_version_already_exists | bool)

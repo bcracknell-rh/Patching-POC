@@ -152,9 +152,21 @@
     repositories: "{{ satellite_downstream_repositories }}"
     state: present
 
-- name: Check if RHEL9-Satellite CV has been published
+- name: Look up RHEL9-Satellite Content View ID
   ansible.builtin.uri:
-    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_view_versions?search=content_view_name={{ satellite_downstream_content_view_name | urlencode }}&per_page=100"
+    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_views?name={{ satellite_downstream_content_view_name | urlencode }}&per_page=1"
+    method: GET
+    user: "{{ satellite_admin_user }}"
+    password: "{{ satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: downstream_cv_lookup
+  changed_when: false
+
+- name: Get existing RHEL9-Satellite CV versions
+  ansible.builtin.uri:
+    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_view_versions?content_view_id={{ downstream_cv_lookup.json.results[0].id }}&per_page=100"
     method: GET
     user: "{{ satellite_admin_user }}"
     password: "{{ satellite_admin_password }}"
@@ -168,13 +180,17 @@
   ansible.builtin.set_fact:
     downstream_cv_already_published: "{{ (downstream_cv_versions.json.results | default([]) | length) > 0 }}"
 
+- name: Debug - downstream CV versions found
+  ansible.builtin.debug:
+    msg: "Found {{ downstream_cv_versions.json.results | length }} existing version(s) for {{ satellite_downstream_content_view_name }}"
+
 - name: Publish RHEL9-Satellite Content View
   redhat.satellite.content_view_version:
     content_view: "{{ satellite_downstream_content_view_name }}"
     organization: "{{ satellite_organization }}"
     description: "Initial publish for downstream Satellite infrastructure"
     state: present
-  when: not downstream_cv_already_published
+  when: not (downstream_cv_already_published | bool)
 
 - name: Promote RHEL9-Satellite CV to Downstream LCE
   redhat.satellite.content_view_version:
@@ -184,7 +200,7 @@
     lifecycle_environments:
       - "{{ satellite_downstream_lifecycle_environment.name }}"
     state: present
-  when: not downstream_cv_already_published
+  when: not (downstream_cv_already_published | bool)
 
 - name: Create downstream Satellite activation key
   redhat.satellite.activation_key:
