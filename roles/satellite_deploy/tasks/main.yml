@@ -7,8 +7,15 @@
 
 - name: Set release version for EUS repos
   ansible.builtin.command:
-    cmd: subscription-manager release --set=9.8
+    cmd: subscription-manager release --set=9.6
   changed_when: true
+
+- name: Enable RHSM repository management (disabled by default on RHEL 9 Cloud Access AMIs)
+  ansible.builtin.lineinfile:
+    path: /etc/rhsm/rhsm.conf
+    regexp: '^manage_repos\s*='
+    line: 'manage_repos = 1'
+
 
 - name: Disable all repos and enable Satellite 6.19 repos
   community.general.rhsm_repository:
