@@ -41,13 +41,19 @@ satellite_cv_rpm_filter_name: "AllPackagesNoErrata"
 satellite_cv_versions:
   - description: "Version 1.0 - Errata up to 2026-06-30"
     errata_end_date: "2026-06-30"
-    promote_to: Prod
+    promote_to: 
+      - Dev
+      - QA
+      - Prod
   - description: "Version 2.0 - Errata up to 2026-07-31"
     errata_end_date: "2026-07-31"
-    promote_to: QA
+    promote_to:
+      - Dev
+      - QA
   - description: "Version 3.0 - Errata up to 2026-08-31"
     errata_end_date: "2026-08-31"
-    promote_to: Dev
+    promote_to:
+      - Dev
 
 satellite_activation_keys:
   - name: ak-rhel10-dev

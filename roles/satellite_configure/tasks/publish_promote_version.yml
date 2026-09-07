@@ -23,7 +23,10 @@
   redhat.satellite.content_view_version:
     content_view: "{{ satellite_content_view_name }}"
     organization: "{{ satellite_organization }}"
-    current_lifecycle_environment: Library
+    current_lifecycle_environment: "{{ 'Library' if idx == 0 else cv_version.promote_to[idx - 1] }}"
     lifecycle_environments:
-      - "{{ cv_version.promote_to }}"
+      - "{{ item }}"
     state: present
+  loop: "{{ cv_version.promote_to }}"
+  loop_control:
+    index_var: idx
