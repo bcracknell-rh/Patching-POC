@@ -1,4 +1,15 @@
 ---
+- name: "Check if CV version already exists - {{ cv_version.description }}"
+  ansible.builtin.shell:
+    cmd: >
+      hammer content-view version list
+      --content-view "{{ satellite_content_view_name }}"
+      --organization "{{ satellite_organization }}"
+      | grep -qF "{{ cv_version.description }}"
+  register: cv_version_exists
+  changed_when: false
+  failed_when: false
+
 - name: "Set errata filter rule to {{ cv_version.errata_end_date }}"
   redhat.satellite.content_view_filter_rule:
     content_view: "{{ satellite_content_view_name }}"
@@ -11,6 +22,7 @@
       - security
       - enhancement
     state: present
+  when: cv_version_exists.rc != 0
 
 - name: "Publish CV version - {{ cv_version.description }}"
   redhat.satellite.content_view_version:
@@ -18,6 +30,7 @@
     organization: "{{ satellite_organization }}"
     description: "{{ cv_version.description }}"
     state: present
+  when: cv_version_exists.rc != 0
 
 - name: "Promote CV to {{ cv_version.promote_to }}"
   redhat.satellite.content_view_version:
@@ -30,3 +43,4 @@
   loop: "{{ cv_version.promote_to }}"
   loop_control:
     index_var: idx
+  when: cv_version_exists.rc != 0
