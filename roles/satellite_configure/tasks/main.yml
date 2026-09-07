@@ -15,7 +15,7 @@
     product: "Red Hat Enterprise Linux for x86_64"
     repositories:
       - releasever: "10"
-        basearch: x86_64
+        # basearch: x86_64
     state: enabled
 
 - name: Enable RHEL 10 AppStream repository
@@ -25,7 +25,7 @@
     product: "Red Hat Enterprise Linux for x86_64"
     repositories:
       - releasever: "10"
-        basearch: x86_64
+        # basearch: x86_64
     state: enabled
 
 - name: Set download policy to on_demand for BaseOS
@@ -34,6 +34,7 @@
     product: "Red Hat Enterprise Linux for x86_64"
     organization: "{{ satellite_organization }}"
     download_policy: on_demand
+    content_type: yum
     state: present
 
 - name: Set download policy to on_demand for AppStream
@@ -42,6 +43,7 @@
     product: "Red Hat Enterprise Linux for x86_64"
     organization: "{{ satellite_organization }}"
     download_policy: on_demand
+    content_type: yum
     state: present
 
 - name: Sync RHEL 10 repositories
