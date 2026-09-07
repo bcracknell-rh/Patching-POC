@@ -52,6 +52,13 @@
   ansible.builtin.hostname:
     name: "{{ satellite_hostname }}"
 
+- name: Add hostname to /etc/hosts for loopback resolution
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ satellite_hostname }}$'
+    line: "{{ ansible_default_ipv4.address }} {{ satellite_hostname }}"
+    state: present
+
 - name: Start and enable firewalld
   ansible.builtin.systemd:
     name: firewalld
@@ -106,10 +113,12 @@
   until: satellite_status.status == 200
 
 - name: Upload subscription manifest
-  ansible.builtin.command:
-    cmd: >
-      hammer subscription upload
-      --organization "{{ satellite_organization }}"
-      --file /root/manifest.zip
+  redhat.satellite.subscription_manifest:
+    server_url: "https://{{ ansible_host }}"
+    username: "{{ satellite_admin_user }}"
+    password: "{{ satellite_admin_password }}"
+    validate_certs: false
+    organization: "{{ satellite_organization }}"
+    manifest_path: /root/manifest.zip
+    state: present
   when: satellite_manifest_path is defined
-  changed_when: true
