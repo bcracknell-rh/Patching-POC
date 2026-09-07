@@ -50,6 +50,7 @@ export ANSIBLE_GALAXY_SERVER_AUTOMATION_HUB_TOKEN="your-token-here"
 ```
 
 
+
 ## Quick Start
 
 ```bash
@@ -68,6 +69,7 @@ ansible-playbook playbooks/01-deploy-aap.yml
 ansible-playbook playbooks/02-deploy-satellite.yml
 
 # Phase 3: Configure Satellite content
+# Before running the next playbook double check the subscriptions have been added to the Satellite instance by going to the GUI at the public ip of the instance -> selecting the subscriptions page -> check the Employee SKU and the Red Hat Satellite Infrastructure Subscription have been added. If not click Add Subscriptions and add 1 entitlement of each
 ansible-playbook playbooks/03-configure-satellite.yml
 
 # Phase 4: Provision RHEL 10.2 VMs
