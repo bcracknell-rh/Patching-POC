@@ -86,3 +86,43 @@ satellite_hostgroups:
     lifecycle_environment: Prod
     content_view: RHEL10
     activation_keys: ak-rhel10-prod
+
+# --- Downstream Satellite infrastructure content ---
+satellite_downstream_lifecycle_environment:
+  name: Downstream
+  prior: Library
+  description: Lifecycle environment for downstream disconnected Satellite
+
+satellite_downstream_repo_sets:
+  - name: "Red Hat Enterprise Linux 9 for x86_64 - BaseOS (RPMs)"
+    product: "Red Hat Enterprise Linux for x86_64"
+    repositories:
+      - releasever: "9"
+  - name: "Red Hat Enterprise Linux 9 for x86_64 - AppStream (RPMs)"
+    product: "Red Hat Enterprise Linux for x86_64"
+    repositories:
+      - releasever: "9"
+  - name: "Red Hat Satellite 6.19 for RHEL 9 x86_64 (RPMs)"
+    product: "Red Hat Satellite"
+    repositories: []
+  - name: "Red Hat Satellite Maintenance 6.19 for RHEL 9 x86_64 (RPMs)"
+    product: "Red Hat Satellite Maintenance"
+    repositories: []
+
+satellite_downstream_repositories:
+  - name: "Red Hat Enterprise Linux 9 for x86_64 - BaseOS RPMs 9"
+    product: "Red Hat Enterprise Linux for x86_64"
+  - name: "Red Hat Enterprise Linux 9 for x86_64 - AppStream RPMs 9"
+    product: "Red Hat Enterprise Linux for x86_64"
+  - name: "Red Hat Satellite 6.19 for RHEL 9 x86_64 RPMs"
+    product: "Red Hat Satellite"
+  - name: "Red Hat Satellite Maintenance 6.19 for RHEL 9 x86_64 RPMs"
+    product: "Red Hat Satellite Maintenance"
+
+satellite_downstream_content_view_name: "RHEL9-Satellite"
+
+satellite_downstream_activation_key:
+  name: ak-downstream-sat
+  lifecycle_environment: Downstream
+  content_view: RHEL9-Satellite
+  auto_attach: true

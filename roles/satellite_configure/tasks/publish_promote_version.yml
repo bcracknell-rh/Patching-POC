@@ -1,14 +1,28 @@
 ---
-- name: "Check if CV version already exists - {{ cv_version.description }}"
-  ansible.builtin.shell:
-    cmd: >
-      hammer content-view version list
-      --content-view "{{ satellite_content_view_name }}"
-      --organization "{{ satellite_organization }}"
-      | grep -qF "{{ cv_version.description }}"
-  register: cv_version_exists
+- name: "Get existing CV versions for {{ satellite_content_view_name }}"
+  ansible.builtin.uri:
+    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_view_versions?search=content_view_name={{ satellite_content_view_name | urlencode }}&per_page=100"
+    method: GET
+    user: "{{ satellite_admin_user }}"
+    password: "{{ satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: existing_cv_versions
   changed_when: false
-  failed_when: false
+
+- name: "Check if version already exists - {{ cv_version.description }}"
+  ansible.builtin.set_fact:
+    cv_version_already_exists: >-
+      {{ existing_cv_versions.json.results
+         | selectattr('description', 'defined')
+         | selectattr('description', 'equalto', cv_version.description)
+         | list | length > 0 }}
+
+- name: "Skip - CV version already exists: {{ cv_version.description }}"
+  ansible.builtin.debug:
+    msg: "CV version '{{ cv_version.description }}' already exists, skipping publish and promote"
+  when: cv_version_already_exists
 
 - name: "Set errata filter rule to {{ cv_version.errata_end_date }}"
   redhat.satellite.content_view_filter_rule:
@@ -22,7 +36,7 @@
       - security
       - enhancement
     state: present
-  when: cv_version_exists.rc != 0
+  when: not cv_version_already_exists
 
 - name: "Publish CV version - {{ cv_version.description }}"
   redhat.satellite.content_view_version:
@@ -30,9 +44,9 @@
     organization: "{{ satellite_organization }}"
     description: "{{ cv_version.description }}"
     state: present
-  when: cv_version_exists.rc != 0
+  when: not cv_version_already_exists
 
-- name: "Promote CV to {{ cv_version.promote_to }}"
+- name: "Promote CV to {{ item }}"
   redhat.satellite.content_view_version:
     content_view: "{{ satellite_content_view_name }}"
     organization: "{{ satellite_organization }}"
@@ -43,4 +57,4 @@
   loop: "{{ cv_version.promote_to }}"
   loop_control:
     index_var: idx
-  when: cv_version_exists.rc != 0
+  when: not cv_version_already_exists

@@ -1,5 +1,5 @@
 ---
-# Phase 5: Configure AAP Workflow Template for Patching Cadence
+# Phase 7: Configure AAP Workflow Template for Patching Cadence
 # This playbook configures AAP with the job templates and workflow
 # needed for the Dev -> QA -> Prod patching lifecycle
 #

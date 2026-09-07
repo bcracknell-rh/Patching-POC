@@ -1,7 +1,8 @@
 ---
-# Phase 4: Provision RHEL 10.2 VMs and register to Satellite
-# Deploys 3 VMs into Dev, QA, and Prod lifecycle environments
-- name: Provision RHEL 10.2 VMs in AWS
+# Phase 6: Provision RHEL 10.2 VMs and register to disconnected Satellite
+# Deploys 3 VMs into the disconnected subnet and registers
+# them to the disconnected Satellite Server (not the connected upstream).
+- name: Provision RHEL 10.2 VMs in disconnected subnet
   hosts: localhost
   connection: local
   gather_facts: false
@@ -10,7 +11,9 @@
     - vars/aws.yml
     - vars/aws_resources.yml
     - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
     - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
 
   vars:
@@ -31,13 +34,17 @@
         activation_key: ak-rhel10-prod
 
   tasks:
-    - name: Create VM security group
+    - name: Create VM security group in disconnected subnet
       amazon.aws.ec2_security_group:
         name: patching-poc-vm-sg
-        description: Security group for RHEL 10 patching VMs
+        description: Security group for RHEL 10 patching VMs (disconnected)
         vpc_id: "{{ vpc_id }}"
         region: "{{ aws_region }}"
         rules: "{{ vm_security_group_rules }}"
+        rules_egress:
+          - proto: all
+            cidr_ip: "{{ aws_vpc_cidr }}"
+            rule_desc: Allow all traffic within VPC only
         tags: "{{ aws_tags }}"
         state: present
       register: vm_sg
@@ -56,17 +63,17 @@
       ansible.builtin.set_fact:
         rhel10_ami_id: "{{ (rhel10_amis.images | sort(attribute='creation_date') | last).image_id }}"
 
-    - name: Launch RHEL 10.2 VMs
+    - name: Launch RHEL 10.2 VMs in disconnected subnet
       amazon.aws.ec2_instance:
         name: "patching-poc-{{ item.name }}"
         key_name: "{{ aws_key_name }}"
         instance_type: "{{ vm_instance_type }}"
         image_id: "{{ rhel10_ami_id }}"
         region: "{{ aws_region }}"
-        vpc_subnet_id: "{{ subnet_id }}"
+        vpc_subnet_id: "{{ disconnected_subnet_id }}"
         security_group: "{{ vm_sg.group_id }}"
         network:
-          assign_public_ip: true
+          assign_public_ip: false
         volumes:
           - device_name: /dev/sda1
             ebs:
@@ -82,46 +89,61 @@
       loop: "{{ patching_vms }}"
       register: vm_instances
 
-    - name: Wait for SSH on all VMs
+    - name: Wait for SSH on all VMs via upstream Satellite bastion
       ansible.builtin.wait_for:
-        host: "{{ item.instances[0].public_ip_address }}"
+        host: "{{ item.instances[0].private_ip_address }}"
         port: 22
         delay: 30
-        timeout: 300
+        timeout: 600
+      delegate_to: "{{ satellite_public_ip }}"
+      vars:
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
       loop: "{{ vm_instances.results }}"
 
     - name: Add VMs to in-memory inventory
       ansible.builtin.add_host:
         name: "{{ item.item.name }}"
-        ansible_host: "{{ item.instances[0].public_ip_address }}"
+        ansible_host: "{{ item.instances[0].private_ip_address }}"
         groups: patching_vms
         ansible_user: ec2-user
         ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ProxyJump=ec2-user@{{ satellite_public_ip }}"
         activation_key: "{{ item.item.activation_key }}"
         vm_environment: "{{ item.item.environment }}"
       loop: "{{ vm_instances.results }}"
 
-- name: Register RHEL 10.2 VMs with Satellite
+- name: Register RHEL 10.2 VMs with disconnected Satellite
   hosts: patching_vms
   become: true
 
   vars_files:
     - vars/aws.yml
     - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
 
   vars:
-    satellite_server_url: "https://{{ satellite_private_ip }}"
+    dsat_server_url: "https://{{ disconnected_satellite_private_ip }}"
 
   tasks:
-    - name: Install Satellite CA certificate
+    - name: Add disconnected Satellite to /etc/hosts
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '.*{{ disconnected_satellite_hostname }}$'
+        line: "{{ disconnected_satellite_private_ip }} {{ disconnected_satellite_hostname }}"
+        state: present
+
+    - name: Install disconnected Satellite CA certificate
       ansible.builtin.command:
-        cmd: "rpm -ivh https://{{ satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
+        cmd: "rpm -ivh https://{{ disconnected_satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
         creates: /etc/rhsm/ca/katello-server-ca.pem
 
-    - name: Register with Satellite using activation key
+    - name: Register with disconnected Satellite using activation key
       community.general.redhat_subscription:
-        server_hostname: "{{ satellite_private_ip }}"
-        org_id: "{{ satellite_organization }}"
+        server_hostname: "{{ disconnected_satellite_private_ip }}"
+        org_id: "{{ disconnected_satellite_organization }}"
         activationkey: "{{ activation_key }}"
         state: present
 
@@ -136,7 +158,7 @@
       ansible.builtin.authorized_key:
         user: root
         state: present
-        key: "{{ lookup('url', satellite_server_url + '/ssh/pubkey', validate_certs=false) }}"
+        key: "{{ lookup('url', dsat_server_url + '/ssh/pubkey', validate_certs=false) }}"
 
     - name: Run initial package profile upload
       ansible.builtin.command:

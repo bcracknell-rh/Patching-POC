@@ -1,0 +1,72 @@
+---
+- name: "Get existing CV versions on downstream for {{ satellite_content_view_name }}"
+  ansible.builtin.uri:
+    url: "https://{{ disconnected_satellite_hostname }}/katello/api/content_view_versions?search=content_view_name={{ satellite_content_view_name | urlencode }}&per_page=100"
+    method: GET
+    user: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: downstream_existing_cv_versions
+  changed_when: false
+
+- name: "Check if version already exists on downstream - {{ cv_version.description }}"
+  ansible.builtin.set_fact:
+    downstream_cv_version_exists: >-
+      {{ downstream_existing_cv_versions.json.results
+         | selectattr('description', 'defined')
+         | selectattr('description', 'equalto', cv_version.description)
+         | list | length > 0 }}
+
+- name: "Skip - CV version already exists on downstream: {{ cv_version.description }}"
+  ansible.builtin.debug:
+    msg: "CV version '{{ cv_version.description }}' already exists on downstream, skipping"
+  when: downstream_cv_version_exists
+
+- name: "Set errata filter rule to {{ cv_version.errata_end_date }} on downstream"
+  redhat.satellite.content_view_filter_rule:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    content_view: "{{ satellite_content_view_name }}"
+    content_view_filter: "{{ satellite_cv_filter_name }}"
+    organization: "{{ disconnected_satellite_organization }}"
+    date_type: issued
+    end_date: "{{ cv_version.errata_end_date }}"
+    types:
+      - bugfix
+      - security
+      - enhancement
+    state: present
+  when: not downstream_cv_version_exists
+
+- name: "Publish CV version on downstream - {{ cv_version.description }}"
+  redhat.satellite.content_view_version:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ disconnected_satellite_organization }}"
+    description: "{{ cv_version.description }}"
+    state: present
+  when: not downstream_cv_version_exists
+
+- name: "Promote CV to {{ item }} on downstream"
+  redhat.satellite.content_view_version:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ disconnected_satellite_organization }}"
+    current_lifecycle_environment: "{{ 'Library' if idx == 0 else cv_version.promote_to[idx - 1] }}"
+    lifecycle_environments:
+      - "{{ item }}"
+    state: present
+  loop: "{{ cv_version.promote_to }}"
+  loop_control:
+    index_var: idx
+  when: not downstream_cv_version_exists

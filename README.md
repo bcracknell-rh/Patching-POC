@@ -5,16 +5,30 @@ Automated patching workflow for RHEL 10.2 VMs using **Red Hat Satellite 6.19**, 
 ## Architecture
 
 ```
-Desktop (Ansible) --> AAP 2.7 (RHEL 10.2, m5.xlarge)
-                         |
-                         +--> Satellite 6.19 (RHEL 9, m5.2xlarge)
-                         |         |
-                         |         +-- Content View: RHEL10
-                         |         |     Library -> Dev -> QA -> Prod
-                         |         |
-                         +--> rhel10-dev  (RHEL 10.2, t3.medium)
-                         +--> rhel10-qa   (RHEL 10.2, t3.medium)
-                         +--> rhel10-prod (RHEL 10.2, t3.medium)
+                         Connected Subnet (10.0.1.0/24)
+                         ┌─────────────────────────────────────────┐
+Desktop (Ansible) ──────>│ AAP 2.7 (RHEL 10.2, m5.xlarge)         │
+                         │                                         │
+  Red Hat CDN ──────────>│ Upstream Satellite 6.19 (RHEL 9, m5.2xl)│
+                         │   +-- Content View: RHEL10              │
+                         │   |     Library -> Dev -> QA -> Prod    │
+                         │   +-- Content View: RHEL9-Satellite     │
+                         │   |     Library -> Downstream           │
+                         └───────────────┬─────────────────────────┘
+                                         │ ISS Network Sync
+                         Disconnected Subnet (10.0.2.0/24)
+                         ┌───────────────┴─────────────────────────┐
+                         │ Downstream Satellite 6.19 + IOP         │
+                         │   (RHEL 9, m5.2xlarge)                  │
+                         │   +-- ISS from upstream Satellite       │
+                         │   +-- Content View: RHEL10              │
+                         │   +-- Lightspeed: Advisor, Vulnerability│
+                         │                                         │
+                         │ rhel10-dev  (RHEL 10.2, t3.medium)      │
+                         │ rhel10-qa   (RHEL 10.2, t3.medium)      │
+                         │ rhel10-prod (RHEL 10.2, t3.medium)      │
+                         └─────────────────────────────────────────┘
+                         (No internet access - VPC-only routing)
 ```
 
 
@@ -72,11 +86,23 @@ ansible-playbook playbooks/02-deploy-satellite.yml
 # Before running the next playbook double check the subscriptions have been added to the Satellite instance by going to the GUI at the public ip of the instance -> selecting the subscriptions page -> check the Employee SKU and the Red Hat Satellite Infrastructure Subscription have been added. If not click Add Subscriptions and add 1 entitlement of each
 ansible-playbook playbooks/03-configure-satellite.yml
 
-# Phase 4: Provision RHEL 10.2 VMs
-ansible-playbook playbooks/04-provision-vms.yml
+# Phase 4: Deploy disconnected Satellite Server with IOP
+# Creates a private subnet, provisions a RHEL 9 m5.2xlarge EC2 instance,
+# installs Satellite, configures ISS Network Sync from the upstream,
+# exports/loads IOP container images, and enables Lightspeed on-prem.
+ansible-playbook playbooks/04-deploy-disconnected-satellite.yml
 
-# Phase 5: Configure AAP Workflow
-ansible-playbook playbooks/05-patching-workflow.yml
+# Phase 5: Sync Lightspeed vulnerability data (cvemap.xml)
+# Transfers CVE data from connected Satellite to disconnected Satellite.
+# Re-run periodically (e.g. weekly) to keep vulnerability data current.
+ansible-playbook playbooks/05-sync-lightspeed-data.yml
+
+# Phase 6: Provision RHEL 10.2 VMs in disconnected subnet
+# VMs register to the disconnected Satellite, not the CDN
+ansible-playbook playbooks/06-provision-vms.yml
+
+# Phase 7: Configure AAP Workflow
+ansible-playbook playbooks/07-patching-workflow.yml
 ```
 
 
@@ -124,7 +150,19 @@ Scheduled to run weekly on Tuesdays at 06:00 UTC.
 
 ## Red Hat Lightspeed Integration
 
-Lightspeed enhances this workflow at several touchpoints:
+Lightspeed on-prem (IOP) runs on the **disconnected Satellite Server** as 19 containerized
+microservices. It provides Advisor and Vulnerability intelligence locally without sending
+data outside your environment. IOP container images are exported from the connected
+Satellite and loaded on the disconnected side. CVE vulnerability data (`cvemap.xml`) is
+synced periodically from the connected Satellite using playbook 05.
+
+Sync vulnerability data:
+
+```bash
+ansible-playbook playbooks/05-sync-lightspeed-data.yml
+```
+
+
 
 ### Vulnerability Intelligence
 
@@ -189,28 +227,37 @@ Patching-POC/
 ├── ansible.cfg
 ├── requirements.yml
 ├── README.md
+├── credentials.yml
 ├── inventory/
 │   ├── aws_ec2.yml
 │   └── group_vars/
 │       ├── all.yml
 │       ├── aap.yml
-│       └── satellite.yml
+│       ├── satellite.yml
+│       └── disconnected_satellite.yml
 ├── playbooks/
 │   ├── 01-deploy-aap.yml
 │   ├── 02-deploy-satellite.yml
 │   ├── 03-configure-satellite.yml
-│   ├── 04-provision-vms.yml
-│   ├── 05-patching-workflow.yml
+│   ├── 04-deploy-disconnected-satellite.yml
+│   ├── 05-sync-lightspeed-data.yml
+│   ├── 06-provision-vms.yml
+│   ├── 07-patching-workflow.yml
+│   ├── publish_promote_downstream.yml
 │   ├── patch-publish-cv.yml
 │   ├── patch-promote.yml
 │   ├── patch-apply.yml
 │   ├── patch-validate.yml
 │   └── vars/
-│       └── aws.yml
+│       ├── aws.yml
+│       ├── aws_resources.yml                     (auto-generated by 01)
+│       ├── satellite_resources.yml               (auto-generated by 02)
+│       └── disconnected_satellite_resources.yml  (auto-generated by 04)
 ├── roles/
 │   ├── aap_bootstrap/
 │   ├── satellite_deploy/
-│   └── satellite_configure/
+│   ├── satellite_configure/
+│   └── satellite_disconnected_deploy/
 └── templates/
 ```
 
@@ -219,11 +266,12 @@ Patching-POC/
 ## AWS Cost Estimate
 
 
-| Component          | Instance   | Storage     | Monthly   |
-| ------------------ | ---------- | ----------- | --------- |
-| AAP 2.7            | m5.xlarge  | 100GB gp3   | ~$140     |
-| Satellite 6.19     | m5.2xlarge | 500GB gp3   | ~$310     |
-| RHEL 10.2 VMs (x3) | t3.medium  | 30GB gp3 ea | ~$90      |
-| **Total**          |            |             | **~$540** |
+| Component                | Instance   | Storage     | Monthly   |
+| ------------------------ | ---------- | ----------- | --------- |
+| AAP 2.7                  | m5.xlarge  | 100GB gp3   | ~$140     |
+| Upstream Satellite 6.19  | m5.2xlarge | 500GB gp3   | ~$310     |
+| Downstream Satellite+IOP | m5.2xlarge | 500GB gp3   | ~$310     |
+| RHEL 10.2 VMs (x3)       | t3.medium  | 30GB gp3 ea | ~$90      |
+| **Total**                |            |             | **~$850** |
 
 

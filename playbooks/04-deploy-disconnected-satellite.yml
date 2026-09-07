@@ -1,0 +1,475 @@
+---
+# Phase 4: Deploy disconnected Satellite Server with IOP
+# Provisions a RHEL 9 EC2 instance in a private subnet, installs
+# Satellite, configures ISS Network Sync from the connected upstream,
+# and enables Lightspeed on-prem (Advisor + Vulnerability).
+
+# --- Play 1: Provision disconnected Satellite EC2 ---
+- name: Provision disconnected Satellite EC2 instance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - vars/aws_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/satellite.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: Create disconnected private subnet
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ vpc_id }}"
+        cidr: "{{ disconnected_subnet_cidr }}"
+        az: "{{ aws_availability_zone }}"
+        region: "{{ aws_region }}"
+        map_public: false
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-subnet'}) }}"
+        state: present
+      register: disconnected_subnet
+
+    - name: Create route table for disconnected subnet (VPC-only, no internet)
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        subnets:
+          - "{{ disconnected_subnet.subnet.id }}"
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-rt'}) }}"
+        state: present
+
+    - name: Create disconnected Satellite security group
+      amazon.aws.ec2_security_group:
+        name: patching-poc-disconnected-satellite-sg
+        description: Security group for disconnected Satellite Server
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules: "{{ disconnected_satellite_security_group_rules }}"
+        rules_egress:
+          - proto: all
+            cidr_ip: "{{ aws_vpc_cidr }}"
+            rule_desc: Allow all traffic within VPC
+        tags: "{{ aws_tags }}"
+        state: present
+      register: dsat_sg
+
+    - name: Find latest RHEL 9 AMI for disconnected Satellite
+      amazon.aws.ec2_ami_info:
+        region: "{{ aws_region }}"
+        owners:
+          - "{{ disconnected_satellite_ami_owner }}"
+        filters:
+          name: "{{ disconnected_satellite_ami_filter }}"
+          architecture: x86_64
+      register: dsat_amis
+
+    - name: Set latest RHEL 9 AMI fact
+      ansible.builtin.set_fact:
+        dsat_ami_id: "{{ (dsat_amis.images | sort(attribute='creation_date') | last).image_id }}"
+
+    - name: Launch disconnected Satellite EC2 instance
+      amazon.aws.ec2_instance:
+        name: patching-poc-disconnected-satellite
+        key_name: "{{ aws_key_name }}"
+        instance_type: "{{ disconnected_satellite_instance_type }}"
+        image_id: "{{ dsat_ami_id }}"
+        region: "{{ aws_region }}"
+        vpc_subnet_id: "{{ disconnected_subnet.subnet.id }}"
+        security_group: "{{ dsat_sg.group_id }}"
+        network:
+          assign_public_ip: false
+        volumes:
+          - device_name: /dev/sda1
+            ebs:
+              volume_size: "{{ disconnected_satellite_root_volume_size }}"
+              volume_type: gp3
+              delete_on_termination: true
+          - device_name: /dev/sdb
+            ebs:
+              volume_size: "{{ disconnected_satellite_data_volume_size }}"
+              volume_type: gp3
+              delete_on_termination: true
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-satellite', 'Role': 'disconnected_satellite', 'Environment': 'management'}) }}"
+        wait: true
+        state: running
+      register: dsat_instance
+
+    - name: Save disconnected Satellite and subnet details
+      ansible.builtin.copy:
+        content: |
+          ---
+          disconnected_satellite_instance_id: "{{ dsat_instance.instances[0].instance_id }}"
+          disconnected_satellite_private_ip: "{{ dsat_instance.instances[0].private_ip_address }}"
+          disconnected_subnet_id: "{{ disconnected_subnet.subnet.id }}"
+        dest: "{{ playbook_dir }}/vars/disconnected_satellite_resources.yml"
+
+    - name: Wait for SSH on disconnected Satellite via bastion
+      ansible.builtin.wait_for:
+        host: "{{ dsat_instance.instances[0].private_ip_address }}"
+        port: 22
+        delay: 30
+        timeout: 600
+      delegate_to: "{{ satellite_public_ip }}"
+      vars:
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+
+    - name: Add disconnected Satellite to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ dsat_instance.instances[0].private_ip_address }}"
+        groups: disconnected_satellite
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ProxyJump=ec2-user@{{ satellite_public_ip }}"
+
+    - name: Add upstream Satellite to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ satellite_public_ip }}"
+        groups: satellite
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+
+# --- Play 2: Install disconnected Satellite ---
+- name: Install disconnected Satellite Server
+  hosts: disconnected_satellite
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/satellite.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  roles:
+    - role: satellite_disconnected_deploy
+
+# --- Play 3: Configure ISS Network Sync and content on downstream ---
+- name: Configure ISS and content on disconnected Satellite
+  hosts: disconnected_satellite
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/satellite.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: Fetch upstream Satellite CA certificate
+      ansible.builtin.command:
+        cmd: >
+          curl -sk https://{{ satellite_private_ip }}/pub/katello-server-ca.crt
+      register: upstream_ca_cert
+      changed_when: false
+
+    - name: Save upstream CA cert to file
+      ansible.builtin.copy:
+        content: "{{ upstream_ca_cert.stdout }}"
+        dest: /root/upstream-satellite-ca.pem
+        mode: "0644"
+
+    - name: Import upstream CA as content credential via hammer
+      ansible.builtin.command:
+        cmd: >
+          hammer content-credential create
+          --name "Upstream Satellite CA"
+          --organization "{{ disconnected_satellite_organization }}"
+          --content-type cert
+          --path /root/upstream-satellite-ca.pem
+      register: ca_create
+      changed_when: true
+      failed_when:
+        - ca_create.rc != 0
+        - "'already been taken' not in ca_create.stderr"
+
+    - name: Get upstream CA content credential ID
+      ansible.builtin.command:
+        cmd: >
+          hammer content-credential info
+          --name "Upstream Satellite CA"
+          --organization "{{ disconnected_satellite_organization }}"
+      register: ca_info
+      changed_when: false
+
+    - name: Extract CA credential ID
+      ansible.builtin.set_fact:
+        upstream_ca_id: "{{ ca_info.stdout | regex_search('Id:\\s+(\\d+)', '\\1') | first }}"
+
+    - name: Configure CDN to use ISS Network Sync from upstream Satellite
+      ansible.builtin.command:
+        cmd: >
+          hammer organization configure-cdn
+          --name "{{ disconnected_satellite_organization }}"
+          --type network_sync
+          --url "https://{{ satellite_hostname }}"
+          --username "{{ satellite_admin_user }}"
+          --password "{{ satellite_admin_password }}"
+          --ssl-ca-credential-id "{{ upstream_ca_id }}"
+          --upstream-organization-label "{{ disconnected_satellite_organization }}"
+      changed_when: true
+
+    - name: Create Lifecycle Environments on downstream
+      redhat.satellite.lifecycle_environment:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ item.name }}"
+        prior: "{{ item.prior }}"
+        description: "{{ item.description }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        state: present
+      loop: "{{ satellite_lifecycle_environments }}"
+
+    - name: Enable RHEL 10 BaseOS repository on downstream
+      redhat.satellite.repository_set:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "Red Hat Enterprise Linux 10 for x86_64 - BaseOS (RPMs)"
+        organization: "{{ disconnected_satellite_organization }}"
+        product: "Red Hat Enterprise Linux for x86_64"
+        repositories:
+          - releasever: "10"
+        state: enabled
+
+    - name: Enable RHEL 10 AppStream repository on downstream
+      redhat.satellite.repository_set:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "Red Hat Enterprise Linux 10 for x86_64 - AppStream (RPMs)"
+        organization: "{{ disconnected_satellite_organization }}"
+        product: "Red Hat Enterprise Linux for x86_64"
+        repositories:
+          - releasever: "10"
+        state: enabled
+
+    - name: Set download policy to on_demand for BaseOS on downstream
+      redhat.satellite.repository:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "Red Hat Enterprise Linux 10 for x86_64 - BaseOS RPMs 10"
+        product: "Red Hat Enterprise Linux for x86_64"
+        organization: "{{ disconnected_satellite_organization }}"
+        download_policy: on_demand
+        content_type: yum
+        state: present
+
+    - name: Set download policy to on_demand for AppStream on downstream
+      redhat.satellite.repository:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "Red Hat Enterprise Linux 10 for x86_64 - AppStream RPMs 10"
+        product: "Red Hat Enterprise Linux for x86_64"
+        organization: "{{ disconnected_satellite_organization }}"
+        download_policy: on_demand
+        content_type: yum
+        state: present
+
+    - name: Sync RHEL 10 repositories from upstream
+      redhat.satellite.repository_sync:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        product: "Red Hat Enterprise Linux for x86_64"
+        organization: "{{ disconnected_satellite_organization }}"
+      async: 7200
+      poll: 60
+
+    - name: Create RHEL10 Content View on downstream
+      redhat.satellite.content_view:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ satellite_content_view_name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        repositories: "{{ satellite_content_view_repos }}"
+        state: present
+
+    - name: Create RPM inclusion filter on downstream
+      redhat.satellite.content_view_filter:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        content_view: "{{ satellite_content_view_name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        name: "{{ satellite_cv_rpm_filter_name }}"
+        filter_type: rpm
+        inclusion: true
+        original_packages: true
+        state: present
+
+    - name: Create erratum-by-date inclusion filter on downstream
+      redhat.satellite.content_view_filter:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        content_view: "{{ satellite_content_view_name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        name: "{{ satellite_cv_filter_name }}"
+        filter_type: erratum
+        inclusion: true
+        state: present
+
+    - name: Publish and promote content view versions on downstream
+      ansible.builtin.include_tasks: publish_promote_downstream.yml
+      loop: "{{ satellite_cv_versions }}"
+      loop_control:
+        loop_var: cv_version
+
+    - name: Create Activation Keys on downstream
+      redhat.satellite.activation_key:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ item.name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        lifecycle_environment: "{{ item.lifecycle_environment }}"
+        content_view: "{{ item.content_view }}"
+        release_version: "{{ item.release_version }}"
+        auto_attach: "{{ item.auto_attach }}"
+        state: present
+      loop: "{{ satellite_activation_keys }}"
+
+    - name: Create Host Groups on downstream
+      redhat.satellite.hostgroup:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ item.name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        lifecycle_environment: "{{ item.lifecycle_environment | default(omit) }}"
+        content_view: "{{ item.content_view | default(omit) }}"
+        locations:
+          - "{{ disconnected_satellite_location }}"
+        state: present
+      loop: "{{ satellite_hostgroups }}"
+
+# --- Play 4: Enable IOP on disconnected Satellite ---
+- name: Export IOP container images from connected Satellite
+  hosts: satellite
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: List IOP container images on connected Satellite
+      ansible.builtin.shell:
+        cmd: podman images --format '{{ "{{" }}.Repository{{ "}}" }}:{{ "{{" }}.Tag{{ "}}" }}' | grep -E '(iop|kafka)' || true
+      register: iop_images
+      changed_when: false
+
+    - name: Save IOP container images to archive
+      ansible.builtin.shell:
+        cmd: >
+          podman save -m
+          $(podman images --format '{{ "{{" }}.Repository{{ "}}" }}:{{ "{{" }}.Tag{{ "}}" }}' | grep -E '(iop|kafka)')
+          -o /root/iop-images.tar
+      when: iop_images.stdout_lines | length > 0
+      changed_when: true
+
+    - name: Pull IOP images from registry if not present locally
+      ansible.builtin.shell:
+        cmd: |
+          images=(
+            "registry.redhat.io/satellite/iop-ingress-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-advisor-frontend-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-host-inventory-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-host-inventory-frontend-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-vmaas-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-advisor-backend-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-notifications-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-yuptoo-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-insights-engine-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-vulnerability-engine-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-gateway-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-core-engine-rhel9:6.19"
+            "registry.redhat.io/satellite/iop-remediations-rhel9:6.19"
+            "registry.redhat.io/amq-streams/kafka-39-rhel9:2.9.1-1"
+          )
+          for img in "${images[@]}"; do
+            podman pull "$img" 2>/dev/null || true
+          done
+          podman save -m ${images[@]} -o /root/iop-images.tar
+      when: iop_images.stdout_lines | length == 0
+      changed_when: true
+
+    - name: Fetch IOP images archive to controller
+      ansible.builtin.fetch:
+        src: /root/iop-images.tar
+        dest: /tmp/iop-images.tar
+        flat: true
+
+- name: Load IOP images and enable on disconnected Satellite
+  hosts: disconnected_satellite
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: Copy IOP images archive to disconnected Satellite
+      ansible.builtin.copy:
+        src: /tmp/iop-images.tar
+        dest: /root/iop-images.tar
+        mode: "0644"
+
+    - name: Load IOP container images
+      ansible.builtin.command:
+        cmd: podman load -i /root/iop-images.tar
+      changed_when: true
+
+    - name: Enable IOP via satellite-installer
+      ansible.builtin.include_role:
+        name: redhat.satellite_operations.installer
+      vars:
+        satellite_installer_scenario: satellite
+        satellite_installer_options:
+          - '--enable-iop'
+
+    - name: Wait for IOP containers to start
+      ansible.builtin.command:
+        cmd: podman ps --filter name=iop --format "{{ '{{' }}.Names{{ '}}' }}"
+      register: iop_containers
+      retries: 30
+      delay: 30
+      until: iop_containers.stdout_lines | length >= 15
+      changed_when: false
+
+    - name: Display running IOP containers
+      ansible.builtin.debug:
+        msg: "Running IOP containers ({{ iop_containers.stdout_lines | length }}): {{ iop_containers.stdout_lines }}"
+
+    - name: Clean up IOP images archive
+      ansible.builtin.file:
+        path: /root/iop-images.tar
+        state: absent

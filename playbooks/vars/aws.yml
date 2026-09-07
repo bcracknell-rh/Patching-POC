@@ -2,6 +2,7 @@
 aws_region: ap-southeast-2
 aws_vpc_cidr: 10.0.0.0/16
 aws_subnet_cidr: 10.0.1.0/24
+disconnected_subnet_cidr: 10.0.2.0/24
 aws_availability_zone: ap-southeast-2a
 aws_key_name: patching-poc
 
@@ -62,10 +63,67 @@ vm_security_group_rules:
   - proto: tcp
     from_port: 22
     to_port: 22
-    cidr_ip: 0.0.0.0/0
-    rule_desc: SSH
+    cidr_ip: 10.0.0.0/16
+    rule_desc: SSH from VPC
   - proto: tcp
     from_port: 443
     to_port: 443
     cidr_ip: 10.0.0.0/16
     rule_desc: HTTPS internal
+
+disconnected_satellite_security_group_rules:
+  - proto: tcp
+    from_port: 22
+    to_port: 22
+    cidr_ip: 10.0.0.0/16
+    rule_desc: SSH from VPC
+  - proto: tcp
+    from_port: 443
+    to_port: 443
+    cidr_ip: 10.0.0.0/16
+    rule_desc: HTTPS
+  - proto: tcp
+    from_port: 5647
+    to_port: 5647
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Katello Agent
+  - proto: tcp
+    from_port: 8000
+    to_port: 8000
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Provisioning
+  - proto: tcp
+    from_port: 8140
+    to_port: 8140
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Puppet
+  - proto: tcp
+    from_port: 9090
+    to_port: 9090
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Smart Proxy
+  - proto: tcp
+    from_port: 80
+    to_port: 80
+    cidr_ip: 10.0.0.0/16
+    rule_desc: HTTP
+  - proto: tcp
+    from_port: 53
+    to_port: 53
+    cidr_ip: 10.0.2.0/24
+    rule_desc: DNS TCP
+  - proto: udp
+    from_port: 53
+    to_port: 53
+    cidr_ip: 10.0.2.0/24
+    rule_desc: DNS UDP
+  - proto: udp
+    from_port: 67
+    to_port: 67
+    cidr_ip: 10.0.2.0/24
+    rule_desc: DHCP
+  - proto: udp
+    from_port: 69
+    to_port: 69
+    cidr_ip: 10.0.2.0/24
+    rule_desc: TFTP

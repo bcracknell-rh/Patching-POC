@@ -1,0 +1,125 @@
+---
+- name: Set hostname
+  ansible.builtin.hostname:
+    name: "{{ disconnected_satellite_hostname }}"
+
+- name: Add hostname to /etc/hosts for resolution
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ disconnected_satellite_hostname }}$'
+    line: "{{ ansible_default_ipv4.address }} {{ disconnected_satellite_hostname }}"
+    state: present
+
+- name: Add upstream Satellite to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ satellite_hostname }}$'
+    line: "{{ satellite_private_ip }} {{ satellite_hostname }}"
+    state: present
+
+- name: Install upstream Satellite CA certificate for registration
+  ansible.builtin.command:
+    cmd: "rpm -ivh https://{{ satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
+    creates: /etc/rhsm/ca/katello-server-ca.pem
+
+- name: Register to upstream Satellite using activation key
+  community.general.redhat_subscription:
+    server_hostname: "{{ satellite_private_ip }}"
+    org_id: "{{ disconnected_satellite_organization }}"
+    activationkey: "{{ satellite_downstream_activation_key.name }}"
+    state: present
+
+- name: Enable RHSM repository management
+  ansible.builtin.lineinfile:
+    path: /etc/rhsm/rhsm.conf
+    regexp: '^manage_repos\s*='
+    line: 'manage_repos = 1'
+
+- name: Disable all repos and enable Satellite repos
+  community.general.rhsm_repository:
+    name: "{{ disconnected_satellite_repos }}"
+    state: enabled
+    purge: true
+
+- name: Install prerequisite packages
+  ansible.builtin.dnf:
+    name:
+      - satellite
+      - firewalld
+    state: present
+
+- name: Format data volume for /var/lib/pulp
+  community.general.filesystem:
+    fstype: xfs
+    dev: "{{ disconnected_satellite_data_device }}"
+
+- name: Create mount point for Pulp data
+  ansible.builtin.file:
+    path: "{{ disconnected_satellite_data_mount }}"
+    state: directory
+    mode: "0755"
+
+- name: Mount Pulp data volume
+  ansible.posix.mount:
+    path: "{{ disconnected_satellite_data_mount }}"
+    src: "{{ disconnected_satellite_data_device }}"
+    fstype: xfs
+    state: mounted
+
+- name: Start and enable firewalld
+  ansible.builtin.systemd:
+    name: firewalld
+    state: started
+    enabled: true
+
+- name: Open firewall ports for Satellite
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ disconnected_satellite_firewall_ports }}"
+
+- name: Copy subscription manifest to disconnected Satellite
+  ansible.builtin.copy:
+    src: "{{ satellite_manifest_path }}"
+    dest: /root/manifest.zip
+    mode: "0600"
+  when: satellite_manifest_path is defined
+
+- name: Run Satellite installer
+  ansible.builtin.include_role:
+    name: redhat.satellite_operations.installer
+  vars:
+    satellite_installer_scenario: satellite
+    satellite_installer_options:
+      - '--foreman-initial-admin-username "{{ disconnected_satellite_admin_user }}"'
+      - '--foreman-initial-admin-password "{{ disconnected_satellite_admin_password }}"'
+      - '--foreman-initial-organization "{{ disconnected_satellite_organization }}"'
+      - '--foreman-initial-location "{{ disconnected_satellite_location }}"'
+      - '--enable-foreman-plugin-remote-execution'
+      - '--enable-foreman-proxy-plugin-remote-execution-script'
+
+- name: Wait for Satellite to be accessible
+  ansible.builtin.uri:
+    url: "https://{{ disconnected_satellite_hostname }}/api/v2/status"
+    validate_certs: false
+    user: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: dsat_status
+  retries: 30
+  delay: 20
+  until: dsat_status.status == 200
+
+- name: Upload subscription manifest
+  redhat.satellite.subscription_manifest:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    organization: "{{ disconnected_satellite_organization }}"
+    manifest_path: /root/manifest.zip
+    state: present
+  when: satellite_manifest_path is defined

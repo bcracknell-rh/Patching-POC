@@ -104,3 +104,93 @@
       - "{{ satellite_location }}"
     state: present
   loop: "{{ satellite_hostgroups }}"
+
+# --- Downstream Satellite infrastructure content ---
+
+- name: Create Downstream lifecycle environment
+  redhat.satellite.lifecycle_environment:
+    name: "{{ satellite_downstream_lifecycle_environment.name }}"
+    prior: "{{ satellite_downstream_lifecycle_environment.prior }}"
+    description: "{{ satellite_downstream_lifecycle_environment.description }}"
+    organization: "{{ satellite_organization }}"
+    state: present
+
+- name: Enable RHEL 9 and Satellite repository sets
+  redhat.satellite.repository_set:
+    name: "{{ item.name }}"
+    organization: "{{ satellite_organization }}"
+    product: "{{ item.product }}"
+    repositories: "{{ item.repositories if item.repositories | length > 0 else omit }}"
+    state: enabled
+  loop: "{{ satellite_downstream_repo_sets }}"
+
+- name: Set download policy to on_demand for downstream repos
+  redhat.satellite.repository:
+    name: "{{ item.name }}"
+    product: "{{ item.product }}"
+    organization: "{{ satellite_organization }}"
+    download_policy: on_demand
+    content_type: yum
+    state: present
+  loop: "{{ satellite_downstream_repositories }}"
+
+- name: Sync downstream Satellite products
+  redhat.satellite.repository_sync:
+    product: "{{ item }}"
+    organization: "{{ satellite_organization }}"
+  loop:
+    - "Red Hat Enterprise Linux for x86_64"
+    - "Red Hat Satellite"
+    - "Red Hat Satellite Maintenance"
+  async: 7200
+  poll: 60
+
+- name: Create RHEL9-Satellite Content View
+  redhat.satellite.content_view:
+    name: "{{ satellite_downstream_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    repositories: "{{ satellite_downstream_repositories }}"
+    state: present
+
+- name: Check if RHEL9-Satellite CV has been published
+  ansible.builtin.uri:
+    url: "https://{{ satellite_public_ip | default(satellite_hostname) }}/katello/api/content_view_versions?search=content_view_name={{ satellite_downstream_content_view_name | urlencode }}&per_page=100"
+    method: GET
+    user: "{{ satellite_admin_user }}"
+    password: "{{ satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: downstream_cv_versions
+  changed_when: false
+
+- name: Set downstream CV published fact
+  ansible.builtin.set_fact:
+    downstream_cv_already_published: "{{ (downstream_cv_versions.json.results | default([]) | length) > 0 }}"
+
+- name: Publish RHEL9-Satellite Content View
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_downstream_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    description: "Initial publish for downstream Satellite infrastructure"
+    state: present
+  when: not downstream_cv_already_published
+
+- name: Promote RHEL9-Satellite CV to Downstream LCE
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_downstream_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    current_lifecycle_environment: Library
+    lifecycle_environments:
+      - "{{ satellite_downstream_lifecycle_environment.name }}"
+    state: present
+  when: not downstream_cv_already_published
+
+- name: Create downstream Satellite activation key
+  redhat.satellite.activation_key:
+    name: "{{ satellite_downstream_activation_key.name }}"
+    organization: "{{ satellite_organization }}"
+    lifecycle_environment: "{{ satellite_downstream_activation_key.lifecycle_environment }}"
+    content_view: "{{ satellite_downstream_activation_key.content_view }}"
+    auto_attach: "{{ satellite_downstream_activation_key.auto_attach }}"
+    state: present

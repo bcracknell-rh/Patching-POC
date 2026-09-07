@@ -1,0 +1,18 @@
+---
+disconnected_satellite_instance_type: m5.2xlarge
+disconnected_satellite_root_volume_size: 100
+disconnected_satellite_data_volume_size: 500
+disconnected_satellite_ami_filter: "RHEL-9*_HVM-*-x86_64-*-Access2-*"
+disconnected_satellite_ami_owner: "309956199498"
+
+disconnected_satellite_hostname: satellite-disconnected.patching-poc.internal
+disconnected_satellite_admin_user: admin
+disconnected_satellite_admin_password: "{{ satellite_admin_password }}"
+disconnected_satellite_organization: "Patching-POC"
+disconnected_satellite_location: "AWS"
+
+satellite_downstream_activation_key:
+  name: ak-downstream-sat
+  lifecycle_environment: Downstream
+  content_view: RHEL9-Satellite
+  auto_attach: true
