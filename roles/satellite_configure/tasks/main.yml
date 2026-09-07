@@ -15,7 +15,6 @@
     product: "Red Hat Enterprise Linux for x86_64"
     repositories:
       - releasever: "10"
-        # basearch: x86_64
     state: enabled
 
 - name: Enable RHEL 10 AppStream repository
@@ -25,7 +24,6 @@
     product: "Red Hat Enterprise Linux for x86_64"
     repositories:
       - releasever: "10"
-        # basearch: x86_64
     state: enabled
 
 - name: Set download policy to on_demand for BaseOS
@@ -60,39 +58,30 @@
     repositories: "{{ satellite_content_view_repos }}"
     state: present
 
-- name: Publish initial Content View version
-  redhat.satellite.content_view_version:
+- name: Create RPM inclusion filter for base packages
+  redhat.satellite.content_view_filter:
     content_view: "{{ satellite_content_view_name }}"
     organization: "{{ satellite_organization }}"
-    description: "Initial publish for Patching POC"
+    name: "{{ satellite_cv_rpm_filter_name }}"
+    filter_type: rpm
+    inclusion: true
+    original_packages: true
     state: present
 
-- name: Promote Content View to Dev
-  redhat.satellite.content_view_version:
+- name: Create erratum-by-date inclusion filter
+  redhat.satellite.content_view_filter:
     content_view: "{{ satellite_content_view_name }}"
     organization: "{{ satellite_organization }}"
-    current_lifecycle_environment: Library
-    lifecycle_environments:
-      - Dev
+    name: "{{ satellite_cv_filter_name }}"
+    filter_type: erratum
+    inclusion: true
     state: present
 
-- name: Promote Content View to QA
-  redhat.satellite.content_view_version:
-    content_view: "{{ satellite_content_view_name }}"
-    organization: "{{ satellite_organization }}"
-    current_lifecycle_environment: Dev
-    lifecycle_environments:
-      - QA
-    state: present
-
-- name: Promote Content View to Prod
-  redhat.satellite.content_view_version:
-    content_view: "{{ satellite_content_view_name }}"
-    organization: "{{ satellite_organization }}"
-    current_lifecycle_environment: QA
-    lifecycle_environments:
-      - Prod
-    state: present
+- name: Publish and promote content view versions with errata dates
+  ansible.builtin.include_tasks: publish_promote_version.yml
+  loop: "{{ satellite_cv_versions }}"
+  loop_control:
+    loop_var: cv_version
 
 - name: Create Activation Keys
   redhat.satellite.activation_key:
@@ -109,8 +98,8 @@
   redhat.satellite.hostgroup:
     name: "{{ item.name }}"
     organization: "{{ satellite_organization }}"
-    lifecycle_environment: "{{ item.lifecycle_environment }}"
-    content_view: "{{ item.content_view }}"
+    lifecycle_environment: "{{ item.lifecycle_environment | default(omit) }}"
+    content_view: "{{ item.content_view | default(omit)}}"
     locations:
       - "{{ satellite_location }}"
     state: present

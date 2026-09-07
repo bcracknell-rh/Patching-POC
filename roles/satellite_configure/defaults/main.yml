@@ -35,6 +35,20 @@ satellite_content_view_repos:
   - name: Red Hat Enterprise Linux 10 for x86_64 - AppStream RPMs 10
     product: Red Hat Enterprise Linux for x86_64
 
+satellite_cv_filter_name: "ErrataByDate"
+satellite_cv_rpm_filter_name: "AllPackagesNoErrata"
+
+satellite_cv_versions:
+  - description: "Version 1.0 - Errata up to 2026-06-30"
+    errata_end_date: "2026-06-30"
+    promote_to: Prod
+  - description: "Version 2.0 - Errata up to 2026-07-31"
+    errata_end_date: "2026-07-31"
+    promote_to: QA
+  - description: "Version 3.0 - Errata up to 2026-08-31"
+    errata_end_date: "2026-08-31"
+    promote_to: Dev
+
 satellite_activation_keys:
   - name: ak-rhel10-dev
     lifecycle_environment: Dev
@@ -53,6 +67,7 @@ satellite_activation_keys:
     auto_attach: true
 
 satellite_hostgroups:
+  - name: "RHEL10"
   - name: "RHEL10/Dev"
     lifecycle_environment: Dev
     content_view: RHEL10

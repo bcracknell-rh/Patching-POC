@@ -1,0 +1,29 @@
+---
+- name: "Set errata filter rule to {{ cv_version.errata_end_date }}"
+  redhat.satellite.content_view_filter_rule:
+    content_view: "{{ satellite_content_view_name }}"
+    content_view_filter: "{{ satellite_cv_filter_name }}"
+    organization: "{{ satellite_organization }}"
+    date_type: issued
+    end_date: "{{ cv_version.errata_end_date }}"
+    types:
+      - bugfix
+      - security
+      - enhancement
+    state: present
+
+- name: "Publish CV version - {{ cv_version.description }}"
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    description: "{{ cv_version.description }}"
+    state: present
+
+- name: "Promote CV to {{ cv_version.promote_to }}"
+  redhat.satellite.content_view_version:
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ satellite_organization }}"
+    current_lifecycle_environment: Library
+    lifecycle_environments:
+      - "{{ cv_version.promote_to }}"
+    state: present
