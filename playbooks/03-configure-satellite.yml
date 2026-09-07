@@ -10,9 +10,10 @@
     - vars/aws.yml
     - ../inventory/group_vars/all.yml
     - ../credentials.yml
+    - ../inventory/group_vars/satellite.yml
 
   module_defaults:
-    group/redhat.satellite.foreman:
+    group/redhat.satellite.satellite:
       server_url: "https://{{ satellite_public_ip | default(satellite_hostname) }}"
       username: "{{ satellite_admin_user }}"
       password: "{{ satellite_admin_password }}"
