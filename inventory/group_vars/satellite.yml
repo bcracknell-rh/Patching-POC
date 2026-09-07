@@ -7,10 +7,11 @@ satellite_ami_owner: "309956199498"
 
 satellite_version: "6.19"
 satellite_repos:
+#   - rhel-9-for-x86_64-baseos-rpms
   - rhel-9-for-x86_64-baseos-eus-rpms
+#   - rhel-9-for-x86_64-appstream-rpms
   - rhel-9-for-x86_64-appstream-eus-rpms
   - satellite-6.19-for-rhel-9-x86_64-rpms
-  - satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
 
 satellite_organization: "Patching-POC"
 satellite_location: "AWS"
