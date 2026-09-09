@@ -1,0 +1,6 @@
+Host 10.0.2.49
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@3.107.223.38

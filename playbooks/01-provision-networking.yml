@@ -1,0 +1,96 @@
+---
+# Phase 1: Provision AWS VPC and networking for Patching POC
+# Creates the VPC, internet gateway, connected (public) subnet,
+# disconnected (private) subnet, and route tables.
+# Run from local desktop: ansible-playbook playbooks/01-provision-networking.yml
+- name: Provision AWS networking for Patching POC
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - ../inventory/group_vars/all.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: Create VPC for Patching POC
+      amazon.aws.ec2_vpc_net:
+        name: patching-poc-vpc
+        cidr_block: "{{ aws_vpc_cidr }}"
+        region: "{{ aws_region }}"
+        tags: "{{ aws_tags }}"
+        state: present
+      register: vpc
+      when: existing_vpc_id | default("") | length == 0
+
+    - name: Set VPC ID fact
+      ansible.builtin.set_fact:
+        vpc_id: "{{ existing_vpc_id if (existing_vpc_id | default('') | length > 0) else vpc.vpc.id }}"
+
+    - name: Create Internet Gateway
+      amazon.aws.ec2_vpc_igw:
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-igw'}) }}"
+        state: present
+      register: igw
+      when: existing_vpc_id | default("") | length == 0
+
+    - name: Create connected (public) subnet
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ vpc_id }}"
+        cidr: "{{ aws_subnet_cidr }}"
+        az: "{{ aws_availability_zone }}"
+        region: "{{ aws_region }}"
+        map_public: true
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-subnet'}) }}"
+        state: present
+      register: subnet
+      when: existing_subnet_id | default("") | length == 0
+
+    - name: Set connected subnet ID fact
+      ansible.builtin.set_fact:
+        subnet_id: "{{ existing_subnet_id if (existing_subnet_id | default('') | length > 0) else subnet.subnet.id }}"
+
+    - name: Create route table for connected subnet (internet via IGW)
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        subnets:
+          - "{{ subnet_id }}"
+        routes:
+          - dest: 0.0.0.0/0
+            gateway_id: "{{ igw.gateway_id }}"
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-rt'}) }}"
+        state: present
+      when: existing_vpc_id | default("") | length == 0
+
+    - name: Create disconnected (private) subnet
+      amazon.aws.ec2_vpc_subnet:
+        vpc_id: "{{ vpc_id }}"
+        cidr: "{{ disconnected_subnet_cidr }}"
+        az: "{{ aws_availability_zone }}"
+        region: "{{ aws_region }}"
+        map_public: false
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-subnet'}) }}"
+        state: present
+      register: disconnected_subnet
+
+    - name: Create route table for disconnected subnet (VPC-only, no internet)
+      amazon.aws.ec2_vpc_route_table:
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        subnets:
+          - "{{ disconnected_subnet.subnet.id }}"
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-rt'}) }}"
+        state: present
+
+    - name: Save networking details for later phases
+      ansible.builtin.copy:
+        content: |
+          ---
+          vpc_id: "{{ vpc_id }}"
+          subnet_id: "{{ subnet_id }}"
+          disconnected_subnet_id: "{{ disconnected_subnet.subnet.id }}"
+        dest: "{{ playbook_dir }}/vars/aws_resources.yml"

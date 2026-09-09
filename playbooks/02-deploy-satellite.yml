@@ -1,6 +1,6 @@
 ---
-# Phase 2: Deploy Satellite 6.19 on AWS EC2
-# Designed to be imported into AAP as a Job Template
+# Phase 2: Deploy Connected Satellite 6.19 on AWS EC2
+# Requires: 01-provision-networking.yml (creates aws_resources.yml with vpc_id, subnet_id)
 - name: Provision Satellite 6.19 EC2 instance
   hosts: localhost
   connection: local

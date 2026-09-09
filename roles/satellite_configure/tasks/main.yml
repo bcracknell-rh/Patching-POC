@@ -1,12 +1,11 @@
 ---
-- name: Create Lifecycle Environments
-  redhat.satellite.lifecycle_environment:
-    name: "{{ item.name }}"
-    prior: "{{ item.prior }}"
-    description: "{{ item.description }}"
-    organization: "{{ satellite_organization }}"
-    state: present
-  loop: "{{ satellite_lifecycle_environments }}"
+# satellite_configure role — connected Satellite only
+# Enables and syncs repos that will be transferred to the disconnected
+# Satellite via ISS Network Sync. Does NOT create Content Views,
+# Lifecycle Environments, Activation Keys, or Host Groups for managed
+# hosts — those belong on the disconnected Satellite (phase 05).
+
+# --- RHEL 10 BaseOS + AppStream (ISS source for managed hosts) ---
 
 - name: Enable RHEL 10 BaseOS repository
   redhat.satellite.repository_set:
@@ -44,68 +43,72 @@
     content_type: yum
     state: present
 
-- name: Sync RHEL 10 repositories
-  redhat.satellite.repository_sync:
-    product: "Red Hat Enterprise Linux for x86_64"
+# --- AAP 2.7 + RHEL 10 EUS (ISS source for AAP installation) ---
+
+- name: Enable RHEL 10 EUS BaseOS repository
+  redhat.satellite.repository_set:
+    name: "Red Hat Enterprise Linux 10 for x86_64 - BaseOS - Extended Update Support (RPMs)"
     organization: "{{ satellite_organization }}"
-  async: 7200
-  poll: 60
+    product: "Red Hat Enterprise Linux for x86_64 - Extended Update Support"
+    repositories:
+      - releasever: "10.2"
+    state: enabled
 
-- name: Create RHEL10 Content View
-  redhat.satellite.content_view:
-    name: "{{ satellite_content_view_name }}"
+- name: Enable RHEL 10 EUS AppStream repository
+  redhat.satellite.repository_set:
+    name: "Red Hat Enterprise Linux 10 for x86_64 - AppStream - Extended Update Support (RPMs)"
     organization: "{{ satellite_organization }}"
-    repositories: "{{ satellite_content_view_repos }}"
-    state: present
+    product: "Red Hat Enterprise Linux for x86_64 - Extended Update Support"
+    repositories:
+      - releasever: "10.2"
+    state: enabled
 
-- name: Create RPM inclusion filter for base packages
-  redhat.satellite.content_view_filter:
-    content_view: "{{ satellite_content_view_name }}"
+- name: Enable AAP 2.7 for RHEL 10 repository
+  redhat.satellite.repository_set:
+    name: "Red Hat Ansible Automation Platform 2.7 for RHEL 10 x86_64 (RPMs)"
     organization: "{{ satellite_organization }}"
-    name: "{{ satellite_cv_rpm_filter_name }}"
-    filter_type: rpm
-    inclusion: true
-    original_packages: true
-    state: present
+    product: "Red Hat Ansible Automation Platform"
+    all_repositories: true
+    state: enabled
 
-- name: Create erratum-by-date inclusion filter
-  redhat.satellite.content_view_filter:
-    content_view: "{{ satellite_content_view_name }}"
-    organization: "{{ satellite_organization }}"
-    name: "{{ satellite_cv_filter_name }}"
-    filter_type: erratum
-    inclusion: true
-    state: present
-
-- name: Publish and promote content view versions with errata dates
-  ansible.builtin.include_tasks: publish_promote_version.yml
-  loop: "{{ satellite_cv_versions }}"
-  loop_control:
-    loop_var: cv_version
-
-- name: Create Activation Keys
-  redhat.satellite.activation_key:
+- name: Set download policy to on_demand for AAP/EUS repos
+  redhat.satellite.repository:
     name: "{{ item.name }}"
+    product: "{{ item.product }}"
     organization: "{{ satellite_organization }}"
-    lifecycle_environment: "{{ item.lifecycle_environment }}"
-    content_view: "{{ item.content_view }}"
-    release_version: "{{ item.release_version }}"
-    auto_attach: "{{ item.auto_attach }}"
+    download_policy: on_demand
+    content_type: yum
     state: present
-  loop: "{{ satellite_activation_keys }}"
+  loop:
+    - name: "Red Hat Enterprise Linux 10 for x86_64 - BaseOS - Extended Update Support RPMs 10.2"
+      product: "Red Hat Enterprise Linux for x86_64 - Extended Update Support"
+    - name: "Red Hat Enterprise Linux 10 for x86_64 - AppStream - Extended Update Support RPMs 10.2"
+      product: "Red Hat Enterprise Linux for x86_64 - Extended Update Support"
+    - name: "Red Hat Ansible Automation Platform 2.7 for RHEL 10 x86_64 RPMs"
+      product: "Red Hat Ansible Automation Platform"
 
-- name: Create Host Groups
-  redhat.satellite.hostgroup:
-    name: "{{ item.name }}"
-    organization: "{{ satellite_organization }}"
-    lifecycle_environment: "{{ item.lifecycle_environment | default(omit) }}"
-    content_view: "{{ item.content_view | default(omit)}}"
-    locations:
-      - "{{ satellite_location }}"
-    state: present
-  loop: "{{ satellite_hostgroups }}"
+# - name: Sync RHEL 10 repositories
+#   redhat.satellite.repository_sync:
+#     product: "Red Hat Enterprise Linux for x86_64"
+#     organization: "{{ satellite_organization }}"
+#   async: 7200
+#   poll: 60
 
-# --- Downstream Satellite infrastructure content ---
+# - name: Sync RHEL 10 EUS repositories
+#   redhat.satellite.repository_sync:
+#     product: "Red Hat Enterprise Linux for x86_64 - Extended Update Support"
+#     organization: "{{ satellite_organization }}"
+#   async: 7200
+#   poll: 60
+# 
+# - name: Sync AAP 2.7 repository
+#   redhat.satellite.repository_sync:
+#     product: "Red Hat Ansible Automation Platform"
+#     organization: "{{ satellite_organization }}"
+#   async: 7200
+#   poll: 60
+
+# --- Downstream Satellite infrastructure content (RHEL 9 + Satellite) ---
 
 - name: Create Downstream lifecycle environment
   redhat.satellite.lifecycle_environment:
@@ -120,7 +123,8 @@
     name: "{{ item.name }}"
     organization: "{{ satellite_organization }}"
     product: "{{ item.product }}"
-    repositories: "{{ item.repositories if item.repositories | length > 0 else omit }}"
+    repositories: "{{ item.repositories if (item.repositories is defined and item.repositories | length > 0) else omit }}"
+    all_repositories: "{{ item.all_repositories | default(omit) }}"
     state: enabled
   loop: "{{ satellite_downstream_repo_sets }}"
 
@@ -141,7 +145,6 @@
   loop:
     - "Red Hat Enterprise Linux for x86_64"
     - "Red Hat Satellite"
-    - "Red Hat Satellite Maintenance"
   async: 7200
   poll: 60
 
@@ -179,10 +182,6 @@
 - name: Set downstream CV published fact
   ansible.builtin.set_fact:
     downstream_cv_already_published: "{{ (downstream_cv_versions.json.results | default([]) | length) > 0 }}"
-
-- name: Debug - downstream CV versions found
-  ansible.builtin.debug:
-    msg: "Found {{ downstream_cv_versions.json.results | length }} existing version(s) for {{ satellite_downstream_content_view_name }}"
 
 - name: Publish RHEL9-Satellite Content View
   redhat.satellite.content_view_version:

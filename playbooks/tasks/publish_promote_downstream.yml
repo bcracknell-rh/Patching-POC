@@ -1,0 +1,84 @@
+---
+# Included by 05-configure-disconnected-content.yml
+# Publishes a CV version with an errata date filter, then promotes
+# through the specified lifecycle environments on the disconnected Satellite.
+
+- name: "Look up Content View ID for {{ satellite_content_view_name }}"
+  ansible.builtin.uri:
+    url: "https://{{ disconnected_satellite_hostname }}/katello/api/content_views?name={{ satellite_content_view_name | urlencode }}&per_page=1"
+    method: GET
+    user: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: cv_lookup
+  changed_when: false
+
+- name: "Get existing CV versions by content_view_id"
+  ansible.builtin.uri:
+    url: "https://{{ disconnected_satellite_hostname }}/katello/api/content_view_versions?content_view_id={{ cv_lookup.json.results[0].id }}&per_page=100"
+    method: GET
+    user: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    status_code: 200
+  register: existing_cv_versions
+  changed_when: false
+
+- name: "Check if version already exists - {{ cv_version.description }}"
+  ansible.builtin.set_fact:
+    cv_version_already_exists: "{{ existing_cv_versions.json.results | selectattr('description', 'defined') | selectattr('description', 'equalto', cv_version.description) | list | length > 0 }}"
+
+- name: "Skip - CV version already exists: {{ cv_version.description }}"
+  ansible.builtin.debug:
+    msg: "CV version '{{ cv_version.description }}' already exists, skipping publish and promote"
+  when: cv_version_already_exists | bool
+
+- name: "Set errata filter rule to {{ cv_version.errata_end_date }}"
+  redhat.satellite.content_view_filter_rule:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    content_view: "{{ satellite_content_view_name }}"
+    content_view_filter: "{{ satellite_cv_filter_name }}"
+    organization: "{{ disconnected_satellite_organization }}"
+    date_type: issued
+    end_date: "{{ cv_version.errata_end_date }}"
+    types:
+      - bugfix
+      - security
+      - enhancement
+    state: present
+  when: not (cv_version_already_exists | bool)
+
+- name: "Publish CV version - {{ cv_version.description }}"
+  redhat.satellite.content_view_version:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ disconnected_satellite_organization }}"
+    description: "{{ cv_version.description }}"
+    state: present
+  when: not (cv_version_already_exists | bool)
+
+- name: "Promote CV to {{ item }}"
+  redhat.satellite.content_view_version:
+    server_url: "https://{{ disconnected_satellite_hostname }}"
+    username: "{{ disconnected_satellite_admin_user }}"
+    password: "{{ disconnected_satellite_admin_password }}"
+    validate_certs: false
+    content_view: "{{ satellite_content_view_name }}"
+    organization: "{{ disconnected_satellite_organization }}"
+    current_lifecycle_environment: "{{ 'Library' if idx == 0 else cv_version.promote_to[idx - 1] }}"
+    lifecycle_environments:
+      - "{{ item }}"
+    state: present
+  loop: "{{ cv_version.promote_to }}"
+  loop_control:
+    index_var: idx
+  when: not (cv_version_already_exists | bool)

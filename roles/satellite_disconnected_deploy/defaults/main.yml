@@ -2,14 +2,13 @@
 disconnected_satellite_hostname: satellite-disconnected.patching-poc.internal
 disconnected_satellite_organization: "Patching-POC"
 disconnected_satellite_location: "AWS"
-disconnected_satellite_data_device: /dev/nvme1n1
+disconnected_satellite_data_device: /dev/nvme0n1
 disconnected_satellite_data_mount: /var/lib/pulp
 
 disconnected_satellite_repos:
   - rhel-9-for-x86_64-baseos-rpms
   - rhel-9-for-x86_64-appstream-rpms
   - satellite-6.19-for-rhel-9-x86_64-rpms
-  - satellite-maintenance-6.19-for-rhel-9-x86_64-rpms
 
 disconnected_satellite_firewall_ports:
   - 443/tcp

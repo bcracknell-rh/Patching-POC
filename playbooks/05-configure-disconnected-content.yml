@@ -1,0 +1,115 @@
+---
+# Phase 5: Configure RHEL10 content management on the disconnected Satellite
+# Requires: 04-deploy-disconnected-satellite.yml (ISS sync complete, repos available)
+#
+# Creates Lifecycle Environments (Dev / QA / Prod), the RHEL10 Content View
+# with errata and RPM filters, publishes and promotes CV versions through
+# the LCEs, and creates activation keys and host groups.
+#
+# This runs from localhost against the disconnected Satellite API
+# via ProxyJump through the connected Satellite.
+- name: Configure RHEL10 content on disconnected Satellite
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - vars/disconnected_satellite_resources.yml
+    - vars/disconnected_content.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  tasks:
+    # --- Lifecycle Environments ---
+    - name: Create Lifecycle Environments on disconnected Satellite
+      redhat.satellite.lifecycle_environment:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ item.name }}"
+        prior: "{{ item.prior }}"
+        description: "{{ item.description }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        state: present
+      loop: "{{ satellite_lifecycle_environments }}"
+
+    # --- Content View ---
+    - name: Create RHEL10 Content View
+      redhat.satellite.content_view:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ satellite_content_view_name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        repositories: "{{ satellite_content_view_repos }}"
+        state: present
+
+    - name: Create RPM inclusion filter
+      redhat.satellite.content_view_filter:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        content_view: "{{ satellite_content_view_name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        name: "{{ satellite_cv_rpm_filter_name }}"
+        filter_type: rpm
+        inclusion: true
+        original_packages: true
+        state: present
+
+    - name: Create erratum-by-date inclusion filter
+      redhat.satellite.content_view_filter:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        content_view: "{{ satellite_content_view_name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        name: "{{ satellite_cv_filter_name }}"
+        filter_type: erratum
+        inclusion: true
+        state: present
+
+    # --- Publish and promote CV versions through LCEs ---
+    - name: Publish and promote content view versions
+      ansible.builtin.include_tasks: tasks/publish_promote_downstream.yml
+      loop: "{{ satellite_cv_versions }}"
+      loop_control:
+        loop_var: cv_version
+
+    # --- Activation Keys ---
+    - name: Create Activation Keys
+      redhat.satellite.activation_key:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ item.name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        lifecycle_environment: "{{ item.lifecycle_environment }}"
+        content_view: "{{ item.content_view }}"
+        release_version: "{{ item.release_version }}"
+        auto_attach: "{{ item.auto_attach }}"
+        state: present
+      loop: "{{ satellite_activation_keys }}"
+
+    # --- Host Groups ---
+    - name: Create Host Groups
+      redhat.satellite.hostgroup:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "{{ item.name }}"
+        organization: "{{ disconnected_satellite_organization }}"
+        lifecycle_environment: "{{ item.lifecycle_environment | default(omit) }}"
+        content_view: "{{ item.content_view | default(omit) }}"
+        locations:
+          - "{{ disconnected_satellite_location }}"
+        state: present
+      loop: "{{ satellite_hostgroups }}"

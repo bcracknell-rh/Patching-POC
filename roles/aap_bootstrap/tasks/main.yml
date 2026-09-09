@@ -1,18 +1,35 @@
 ---
-- name: Register system with Red Hat
+- name: Add disconnected Satellite to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '.*{{ disconnected_satellite_hostname }}$'
+    line: "{{ disconnected_satellite_private_ip }} {{ disconnected_satellite_hostname }}"
+    state: present
+
+- name: Download disconnected Satellite CA certificate RPM
+  ansible.builtin.get_url:
+    url: "https://{{ disconnected_satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
+    dest: /tmp/katello-ca-consumer-latest.noarch.rpm
+    validate_certs: false
+    mode: "0644"
+
+- name: Install disconnected Satellite CA certificate
+  ansible.builtin.dnf:
+    name: /tmp/katello-ca-consumer-latest.noarch.rpm
+    state: present
+    disable_gpg_check: true
+    disablerepo: "*"
+
+- name: Register with disconnected Satellite using activation key
   community.general.redhat_subscription:
-    org_id: "{{ rhsm_org_id }}"
-    activationkey: "{{ rhsm_activation_key }}"
+    server_hostname: "{{ disconnected_satellite_private_ip }}"
+    org_id: "{{ disconnected_satellite_organization }}"
+    activationkey: "{{ aap_activation_key }}"
     state: present
 
 - name: Set release version for EUS repos
   ansible.builtin.command:
     cmd: subscription-manager release --set=10.2
-  changed_when: true
-
-- name: Refresh subscription data
-  ansible.builtin.command:
-    cmd: subscription-manager refresh
   changed_when: true
 
 - name: Enable required repositories for AAP 2.7

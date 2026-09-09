@@ -4,32 +4,80 @@ Automated patching workflow for RHEL 10.2 VMs using **Red Hat Satellite 6.19**, 
 
 ## Architecture
 
+This POC is designed for a **disconnected environment**. The connected Satellite is content ingress only. AAP, the downstream Satellite, and all RHEL hosts live in a private subnet with no internet access.
+
 ```
-                         Connected Subnet (10.0.1.0/24)
-                         ┌─────────────────────────────────────────┐
-Desktop (Ansible) ──────>│ AAP 2.7 (RHEL 10.2, m5.xlarge)         │
-                         │                                         │
-  Red Hat CDN ──────────>│ Upstream Satellite 6.19 (RHEL 9, m5.2xl)│
-                         │   +-- Content View: RHEL10              │
-                         │   |     Library -> Dev -> QA -> Prod    │
-                         │   +-- Content View: RHEL9-Satellite     │
-                         │   |     Library -> Downstream           │
-                         └───────────────┬─────────────────────────┘
-                                         │ ISS Network Sync
-                         Disconnected Subnet (10.0.2.0/24)
-                         ┌───────────────┴─────────────────────────┐
-                         │ Downstream Satellite 6.19 + IOP         │
-                         │   (RHEL 9, m5.2xlarge)                  │
-                         │   +-- ISS from upstream Satellite       │
-                         │   +-- Content View: RHEL10              │
-                         │   +-- Lightspeed: Advisor, Vulnerability│
-                         │                                         │
-                         │ rhel10-dev  (RHEL 10.2, t3.medium)      │
-                         │ rhel10-qa   (RHEL 10.2, t3.medium)      │
-                         │ rhel10-prod (RHEL 10.2, t3.medium)      │
-                         └─────────────────────────────────────────┘
-                         (No internet access - VPC-only routing)
+                            Internet
+                              |
+                     Red Hat CDN / registry.redhat.io
+                              |
+    Connected subnet (10.0.1.0/24)  public + IGW
+    +--------------------------------------------------------+
+    |  SA laptop / bastion                                   |
+    |                                                        |
+    |  Connected Satellite 6.19  (RHEL 9, m5.2xlarge)        |
+    |    Content ingress only                                |
+    |    CV RHEL10: Library -> Dev -> QA -> Prod             |
+    |    CV RHEL9-Satellite -> Downstream                    |
+    |    AAP 2.7 + RHEL 10 EUS repos synced for ISS         |
+    +-----------------------------+--------------------------+
+                                  | ISS Network Sync (HTTPS)
+    Disconnected subnet (10.0.2.0/24)  VPC-only, no IGW
+    +-----------------------------+--------------------------+
+    |  AAP 2.7  (RHEL 10.2, m5.xlarge)                      |
+    |    Bundle install, no public IP                        |
+    |    Registered to disconnected Satellite                |
+    |                                                        |
+    |  Disconnected Satellite 6.19 + IOP  (RHEL 9, m5.2xl)  |
+    |    ISS from connected Satellite                        |
+    |    CV RHEL10: Library -> Dev -> QA -> Prod             |
+    |    Lightspeed on-prem: Advisor, Vulnerability          |
+    |                                                        |
+    |  rhel10-dev / rhel10-qa / rhel10-prod  (RHEL 10.2)    |
+    |    Registered to disconnected Satellite only           |
+    +--------------------------------------------------------+
 ```
+
+
+
+### Disconnected design
+
+This is a **restricted network**, not a physical air gap. The disconnected subnet (`10.0.2.0/24`) has VPC routing to the connected subnet (`10.0.1.0/24`) but no internet gateway. Nothing in the disconnected zone can reach `cdn.redhat.com`, `registry.redhat.io`, `galaxy.ansible.com`, or GitHub.
+
+**Content crosses the boundary in three ways:**
+
+1. **ISS Network Sync** — the disconnected Satellite pulls RPM and errata content from the connected Satellite over HTTPS on the private network. Configured via `hammer organization configure-cdn --type network_sync` in [playbooks/04-deploy-disconnected-satellite.yml](playbooks/04-deploy-disconnected-satellite.yml).
+2. **IOP container images** — exported from the connected Satellite with `podman save`, transferred via Ansible `fetch`/`copy` through the bastion, loaded with `podman load` on the disconnected side (playbook 04).
+3. **CVE vulnerability data** (`cvemap.xml`) — copied from the connected Satellite to the disconnected Satellite periodically via [playbooks/06-sync-lightspeed-data.yml](playbooks/06-sync-lightspeed-data.yml).
+
+
+
+### How disconnected AAP is supplied
+
+AAP never reaches the internet at runtime. Everything it needs is either in the containerized setup bundle or comes from the disconnected Satellite after ISS.
+
+
+| AAP dependency             | How it is supplied                                                                                                                                                                                                                                                                                      |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Initial install            | AAP 2.7 containerized setup bundle copied via bastion; `bundle_install=true` ([inventory.j2](roles/aap_bootstrap/templates/inventory.j2))                                                                                                                                                               |
+| RHEL 10 EUS + AAP 2.7 RPMs | Enable repos on connected Satellite, ISS to disconnected; register AAP with a Satellite activation key (not CDN RHSM)                                                                                                                                                                                   |
+| Execution environments     | Default EEs ship inside the setup bundle; custom EEs built on the connected side with `ansible-builder`, `podman save`, transferred in                                                                                                                                                                  |
+| Ansible collections        | Downloaded on connected side (`ansible-galaxy collection download`), published into **Private Automation Hub** on AAP (`ansible-galaxy collection publish`), then baked into a custom EE or pulled by Controller at project sync. ISS does **not** carry collections — Private Hub is the supply chain. |
+| Playbook project           | Manual/archive upload or a git server inside the VPC. No GitHub.                                                                                                                                                                                                                                        |
+| Satellite inventory        | `satellite6` inventory source against the **disconnected** Satellite                                                                                                                                                                                                                                    |
+| Insights / CVE data        | IOP on disconnected Satellite; `cvemap.xml` via playbook 05                                                                                                                                                                                                                                             |
+
+
+
+
+### What runs where
+
+- **AAP (disconnected):** Satellite inventory from the downstream Satellite, CV publish/promote on downstream, errata apply to Dev/QA/Prod, host validation, approval gates.
+- **SA laptop / connected-side playbooks:** CDN sync on the connected Satellite, ISS trigger, IOP image export, `cvemap.xml` transfer. These jobs need the connected zone and do not belong in the disconnected patching workflow.
+
+Operators reach the AAP UI through the connected Satellite (bastion) or a VPN — AAP has no public IP.
+
+> **Note:** Phase 08 (AAP workflow configuration) requires an SSH local port forward to reach the AAP API from the desktop since AAP has no public IP. See the Quick Start section for the tunnel command.
 
 
 
@@ -39,7 +87,7 @@ Desktop (Ansible) ──────>│ AAP 2.7 (RHEL 10.2, m5.xlarge)         
 - Red Hat subscriptions (AAP, Satellite, RHEL)
 - Subscription manifest from [access.redhat.com](https://access.redhat.com)
 - Ensure Activation Key has the correct repos added to it. Check through the `inventory/groups_vars/aap.yml` and `satellite.yml` for the repos to add.
-- SSH key pair named `patching-poc` in your AWS region
+- SSH key pair named `patching-poc` in your AWS region with the .pem file downloaded into the root of this repo
 - Ansible Core 2.16+ installed locally
 - Vault password file for encrypted credentials
 - Red Hat Automation Hub API token (see below)
@@ -76,33 +124,49 @@ export AWS_ACCESS_KEY_ID="your-access-key"
 export AWS_SECRET_ACCESS_KEY="your-secret-key"
 export AWS_DEFAULT_REGION="ap-southeast-2"
 
-# Phase 1: Deploy AAP Controller
-ansible-playbook playbooks/01-deploy-aap.yml
+# Phase 1: Provision VPC, subnets, and routing
+ansible-playbook playbooks/01-provision-networking.yml
 
-# Phase 2: Deploy Satellite (run from AAP or locally)
+# Phase 2: Deploy connected Satellite
 ansible-playbook playbooks/02-deploy-satellite.yml
 
-# Phase 3: Configure Satellite content
-# Before running the next playbook double check the subscriptions have been added to the Satellite instance by going to the GUI at the public ip of the instance -> selecting the subscriptions page -> check the Employee SKU and the Red Hat Satellite Infrastructure Subscription have been added. If not click Add Subscriptions and add 1 entitlement of each
+# Phase 3: Sync repos on connected Satellite (CDN → upstream)
+# Syncs RHEL 10, RHEL 10 EUS, AAP 2.7, RHEL 9 + Satellite repos.
+# Before running, check the Satellite GUI subscriptions page and ensure
+# the Employee SKU and Satellite Infrastructure Subscription are present.
 ansible-playbook playbooks/03-configure-satellite.yml
 
-# Phase 4: Deploy disconnected Satellite Server with IOP
-# Creates a private subnet, provisions a RHEL 9 m5.2xlarge EC2 instance,
+# Phase 4: Deploy disconnected Satellite with ISS + IOP
+# Provisions a RHEL 9 m5.2xlarge EC2 instance in the disconnected subnet,
 # installs Satellite, configures ISS Network Sync from the upstream,
-# exports/loads IOP container images, and enables Lightspeed on-prem.
+# enables/syncs RHEL 10 repos via ISS, exports/loads IOP container images,
+# and creates the ak-aap activation key for AAP registration.
 ansible-playbook playbooks/04-deploy-disconnected-satellite.yml
 
-# Phase 5: Sync Lightspeed vulnerability data (cvemap.xml)
+# Phase 5: Configure RHEL10 content on disconnected Satellite
+# Creates Dev/QA/Prod lifecycle environments, RHEL10 Content View with
+# errata filters, publishes and promotes CV versions, creates activation
+# keys and host groups. This is where patching content management lives.
+ansible-playbook playbooks/05-configure-disconnected-content.yml
+
+# Phase 6: Sync Lightspeed vulnerability data (cvemap.xml)
 # Transfers CVE data from connected Satellite to disconnected Satellite.
 # Re-run periodically (e.g. weekly) to keep vulnerability data current.
-ansible-playbook playbooks/05-sync-lightspeed-data.yml
+ansible-playbook playbooks/06-sync-lightspeed-data.yml
 
-# Phase 6: Provision RHEL 10.2 VMs in disconnected subnet
+# Phase 7: Deploy AAP 2.7 Controller in the disconnected subnet
+# AAP has no public IP; SSH via ProxyJump through the connected Satellite.
+# Registered to the disconnected Satellite (not CDN).
+ansible-playbook playbooks/07-deploy-aap.yml
+
+# Phase 8: Provision RHEL 10.2 VMs in disconnected subnet
 # VMs register to the disconnected Satellite, not the CDN
-ansible-playbook playbooks/06-provision-vms.yml
+ansible-playbook playbooks/08-provision-vms.yml
 
-# Phase 7: Configure AAP Workflow
-ansible-playbook playbooks/07-patching-workflow.yml
+# Phase 9: Configure AAP Workflow
+# Before running, open an SSH tunnel for the AAP API:
+#   ssh -f -N -L 8443:<aap_private_ip>:443 ec2-user@<satellite_public_ip>
+ansible-playbook playbooks/09-configure-aap-workflow.yml
 ```
 
 
@@ -159,7 +223,7 @@ synced periodically from the connected Satellite using playbook 05.
 Sync vulnerability data:
 
 ```bash
-ansible-playbook playbooks/05-sync-lightspeed-data.yml
+ansible-playbook playbooks/06-sync-lightspeed-data.yml
 ```
 
 
@@ -240,9 +304,11 @@ Patching-POC/
 │   ├── 02-deploy-satellite.yml
 │   ├── 03-configure-satellite.yml
 │   ├── 04-deploy-disconnected-satellite.yml
-│   ├── 05-sync-lightspeed-data.yml
-│   ├── 06-provision-vms.yml
-│   ├── 07-patching-workflow.yml
+│   ├── 05-configure-disconnected-content.yml
+│   ├── 06-sync-lightspeed-data.yml
+│   ├── 07-deploy-aap.yml
+│   ├── 08-provision-vms.yml
+│   ├── 09-configure-aap-workflow.yml
 │   ├── publish_promote_downstream.yml
 │   ├── patch-publish-cv.yml
 │   ├── patch-promote.yml

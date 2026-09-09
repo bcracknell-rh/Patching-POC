@@ -1,7 +1,13 @@
 ---
-# Phase 7: Configure AAP Workflow Template for Patching Cadence
+# Phase 9: Configure AAP Workflow Template for Patching Cadence
+# Requires: 07-deploy-aap.yml (creates aap_resources.yml with aap_private_ip)
+#
 # This playbook configures AAP with the job templates and workflow
-# needed for the Dev -> QA -> Prod patching lifecycle
+# needed for the Dev -> QA -> Prod patching lifecycle.
+#
+# AAP has no public IP. Before running this phase, open an SSH tunnel:
+#   ssh -f -N -L 8443:<aap_private_ip>:443 ec2-user@<satellite_public_ip>
+# Then set aap_hostname to https://localhost:8443 below (or via extra-vars).
 #
 # AAP 2.7 uses the ansible.platform collection with the unified
 # platform gateway API. Direct component API access is removed.
@@ -14,12 +20,15 @@
     - vars/aws.yml
     - vars/aws_resources.yml
     - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - vars/aap_resources.yml
     - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
 
   module_defaults:
     group/ansible.platform.gateway:
-      aap_hostname: "https://{{ aap_public_ip }}"
+      aap_hostname: "{{ aap_tunnel_url | default('https://localhost:8443') }}"
       aap_username: "{{ aap_admin_user }}"
       aap_password: "{{ aap_admin_password }}"
       aap_validate_certs: false
@@ -63,9 +72,9 @@
         organization: "Patching-POC"
         credential_type: "Satellite Credentials"
         inputs:
-          satellite_url: "https://{{ satellite_private_ip }}"
-          satellite_username: "{{ satellite_admin_user }}"
-          satellite_password: "{{ satellite_admin_password }}"
+          satellite_url: "https://{{ disconnected_satellite_private_ip }}"
+          satellite_username: "{{ disconnected_satellite_admin_user }}"
+          satellite_password: "{{ disconnected_satellite_admin_password }}"
         state: present
 
     - name: Create Machine credential for managed hosts
@@ -79,14 +88,13 @@
           become_method: sudo
         state: present
 
-    - name: Create project from Git repo
+    - name: Create project (archive upload — no GitHub in disconnected zone)
       ansible.platform.project:
         name: "Patching POC Playbooks"
         organization: "Patching-POC"
-        scm_type: git
-        scm_url: "{{ patching_poc_git_url | default('https://github.com/example/patching-poc.git') }}"
-        scm_branch: main
-        scm_update_on_launch: true
+        scm_type: archive
+        scm_url: "{{ patching_poc_archive_url | default('https://internal-git.vpc.local/patching-poc/archive/main.tar.gz') }}"
+        scm_update_on_launch: false
         state: present
 
     - name: Create dynamic inventory from Satellite

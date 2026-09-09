@@ -1,5 +1,6 @@
 ---
-# Phase 6: Provision RHEL 10.2 VMs and register to disconnected Satellite
+# Phase 8: Provision RHEL 10.2 VMs and register to disconnected Satellite
+# Requires: 01-provision-networking.yml, 04-deploy-disconnected-satellite.yml
 # Deploys 3 VMs into the disconnected subnet and registers
 # them to the disconnected Satellite Server (not the connected upstream).
 - name: Provision RHEL 10.2 VMs in disconnected subnet
@@ -101,6 +102,21 @@
         ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
       loop: "{{ vm_instances.results }}"
 
+    - name: Add VM host entries to SSH config for disconnected subnet
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/.ssh_config_disconnected"
+        line: |
+
+          Host {{ item.instances[0].private_ip_address }}
+            User ec2-user
+            IdentityFile ~/.ssh/{{ aws_key_name }}.pem
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyCommand ssh -i ~/.ssh/{{ aws_key_name }}.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@{{ satellite_public_ip }}
+        create: true
+        mode: "0600"
+      loop: "{{ vm_instances.results }}"
+
     - name: Add VMs to in-memory inventory
       ansible.builtin.add_host:
         name: "{{ item.item.name }}"
@@ -108,7 +124,7 @@
         groups: patching_vms
         ansible_user: ec2-user
         ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ProxyJump=ec2-user@{{ satellite_public_ip }}"
+        ansible_ssh_common_args: "-F {{ playbook_dir }}/.ssh_config_disconnected -o ControlMaster=no"
         activation_key: "{{ item.item.activation_key }}"
         vm_environment: "{{ item.item.environment }}"
       loop: "{{ vm_instances.results }}"
@@ -135,10 +151,19 @@
         line: "{{ disconnected_satellite_private_ip }} {{ disconnected_satellite_hostname }}"
         state: present
 
+    - name: Download disconnected Satellite CA certificate RPM
+      ansible.builtin.get_url:
+        url: "https://{{ disconnected_satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
+        dest: /tmp/katello-ca-consumer-latest.noarch.rpm
+        validate_certs: false
+        mode: "0644"
+
     - name: Install disconnected Satellite CA certificate
-      ansible.builtin.command:
-        cmd: "rpm -ivh https://{{ disconnected_satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
-        creates: /etc/rhsm/ca/katello-server-ca.pem
+      ansible.builtin.dnf:
+        name: /tmp/katello-ca-consumer-latest.noarch.rpm
+        state: present
+        disable_gpg_check: true
+        disablerepo: "*"
 
     - name: Register with disconnected Satellite using activation key
       community.general.redhat_subscription:

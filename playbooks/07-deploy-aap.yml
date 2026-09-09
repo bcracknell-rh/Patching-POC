@@ -1,0 +1,131 @@
+---
+# Phase 7: Deploy AAP 2.7 Controller in the disconnected subnet
+# Requires: 01-provision-networking.yml, 02-deploy-satellite.yml,
+#           03-configure-satellite.yml, 04-deploy-disconnected-satellite.yml
+# AAP is provisioned in the private subnet with no public IP.
+# SSH access is via ProxyJump through the connected Satellite.
+# AAP registers to the disconnected Satellite (not CDN).
+# Run from local desktop: ansible-playbook playbooks/06-deploy-aap.yml
+- name: Deploy AAP 2.7 Controller in disconnected subnet
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - vars/aws.yml
+    - vars/aws_resources.yml
+    - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/aap.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  tasks:
+    - name: Create AAP security group (VPC-only)
+      amazon.aws.ec2_security_group:
+        name: patching-poc-aap-sg
+        description: Security group for AAP Controller (disconnected)
+        vpc_id: "{{ vpc_id }}"
+        region: "{{ aws_region }}"
+        rules: "{{ aap_security_group_rules }}"
+        rules_egress:
+          - proto: all
+            cidr_ip: "{{ aws_vpc_cidr }}"
+            rule_desc: Allow all traffic within VPC only
+        tags: "{{ aws_tags }}"
+        state: present
+      register: aap_sg
+
+    - name: Find latest RHEL 10.2 AMI for AAP
+      amazon.aws.ec2_ami_info:
+        region: "{{ aws_region }}"
+        owners:
+          - "{{ aap_ami_owner }}"
+        filters:
+          name: "{{ aap_ami_filter }}"
+          architecture: x86_64
+      register: aap_amis
+
+    - name: Set latest RHEL 10.2 AMI fact
+      ansible.builtin.set_fact:
+        aap_ami_id: "{{ (aap_amis.images | sort(attribute='creation_date') | last).image_id }}"
+
+    - name: Launch AAP Controller EC2 instance in disconnected subnet
+      amazon.aws.ec2_instance:
+        name: patching-poc-aap
+        key_name: "{{ aws_key_name }}"
+        instance_type: "{{ aap_instance_type }}"
+        image_id: "{{ aap_ami_id }}"
+        region: "{{ aws_region }}"
+        vpc_subnet_id: "{{ disconnected_subnet_id }}"
+        security_group: "{{ aap_sg.group_id }}"
+        network:
+          assign_public_ip: false
+        volumes:
+          - device_name: /dev/sda1
+            ebs:
+              volume_size: "{{ aap_root_volume_size }}"
+              volume_type: gp3
+              delete_on_termination: true
+        tags: "{{ aws_tags | combine({'Name': 'patching-poc-aap', 'Role': 'aap', 'Environment': 'management'}) }}"
+        wait: true
+        state: running
+      register: aap_instance
+
+    - name: Wait for SSH on AAP via connected Satellite bastion
+      ansible.builtin.wait_for:
+        host: "{{ aap_instance.instances[0].private_ip_address }}"
+        port: 22
+        delay: 30
+        timeout: 600
+      delegate_to: "{{ satellite_public_ip }}"
+      vars:
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+
+    - name: Add AAP host entry to SSH config for disconnected subnet
+      ansible.builtin.lineinfile:
+        path: "{{ playbook_dir }}/.ssh_config_disconnected"
+        line: |
+
+          Host {{ aap_instance.instances[0].private_ip_address }}
+            User ec2-user
+            IdentityFile ~/.ssh/{{ aws_key_name }}.pem
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyCommand ssh -i ~/.ssh/{{ aws_key_name }}.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@{{ satellite_public_ip }}
+        create: true
+        mode: "0600"
+
+    - name: Add AAP host to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ aap_instance.instances[0].private_ip_address }}"
+        groups: aap
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+        ansible_ssh_common_args: "-F {{ playbook_dir }}/.ssh_config_disconnected -o ControlMaster=no"
+
+    - name: Save AAP instance details
+      ansible.builtin.copy:
+        content: |
+          ---
+          aap_instance_id: "{{ aap_instance.instances[0].instance_id }}"
+          aap_private_ip: "{{ aap_instance.instances[0].private_ip_address }}"
+        dest: "{{ playbook_dir }}/vars/aap_resources.yml"
+
+- name: Configure AAP Controller instance
+  hosts: aap
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/aap.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  roles:
+    - role: aap_bootstrap

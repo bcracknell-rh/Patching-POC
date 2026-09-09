@@ -1,5 +1,5 @@
 ---
-# Phase 5: Sync CVE vulnerability data to disconnected Satellite
+# Phase 6: Sync CVE vulnerability data to disconnected Satellite
 # Transfers cvemap.xml from the connected Satellite (where it auto-populates)
 # to the disconnected Satellite for the IOP Vulnerability service.
 # Run this playbook periodically (e.g. weekly via AAP schedule) to keep

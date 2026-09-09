@@ -17,14 +17,23 @@
     line: "{{ satellite_private_ip }} {{ satellite_hostname }}"
     state: present
 
-- name: Install upstream Satellite CA certificate for registration
-  ansible.builtin.command:
-    cmd: "rpm -ivh https://{{ satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
-    creates: /etc/rhsm/ca/katello-server-ca.pem
+- name: Download upstream Satellite CA certificate RPM
+  ansible.builtin.get_url:
+    url: "https://{{ satellite_private_ip }}/pub/katello-ca-consumer-latest.noarch.rpm"
+    dest: /tmp/katello-ca-consumer-latest.noarch.rpm
+    validate_certs: false
+    mode: "0644"
+
+- name: Install upstream Satellite CA certificate
+  ansible.builtin.dnf:
+    name: /tmp/katello-ca-consumer-latest.noarch.rpm
+    state: present
+    disable_gpg_check: true
+    disablerepo: "*"
 
 - name: Register to upstream Satellite using activation key
   community.general.redhat_subscription:
-    server_hostname: "{{ satellite_private_ip }}"
+    server_hostname: "{{ satellite_hostname }}"
     org_id: "{{ disconnected_satellite_organization }}"
     activationkey: "{{ satellite_downstream_activation_key.name }}"
     state: present
@@ -34,6 +43,14 @@
     path: /etc/rhsm/rhsm.conf
     regexp: '^manage_repos\s*='
     line: 'manage_repos = 1'
+
+- name: Disable RHUI repos (AWS AMI default — unreachable in disconnected subnet)
+  ansible.builtin.shell: |
+    for f in /etc/yum.repos.d/redhat-rhui*.repo; do
+      [ -f "$f" ] && dnf config-manager --set-disabled $(grep -oP '(?<=\[)[^\]]+' "$f") 2>/dev/null
+    done
+    true
+  changed_when: false
 
 - name: Disable all repos and enable Satellite repos
   community.general.rhsm_repository:
@@ -48,10 +65,18 @@
       - firewalld
     state: present
 
+- name: Check if data volume is already mounted
+  ansible.builtin.command:
+    cmd: "mountpoint -q {{ disconnected_satellite_data_mount }}"
+  register: pulp_mounted
+  changed_when: false
+  failed_when: false
+
 - name: Format data volume for /var/lib/pulp
   community.general.filesystem:
     fstype: xfs
     dev: "{{ disconnected_satellite_data_device }}"
+  when: pulp_mounted.rc != 0
 
 - name: Create mount point for Pulp data
   ansible.builtin.file:

@@ -14,13 +14,13 @@ aap_security_group_rules:
   - proto: tcp
     from_port: 22
     to_port: 22
-    cidr_ip: 0.0.0.0/0
-    rule_desc: SSH
+    cidr_ip: 10.0.0.0/16
+    rule_desc: SSH from VPC
   - proto: tcp
     from_port: 443
     to_port: 443
-    cidr_ip: 0.0.0.0/0
-    rule_desc: HTTPS
+    cidr_ip: 10.0.0.0/16
+    rule_desc: HTTPS from VPC
   - proto: tcp
     from_port: 27199
     to_port: 27199

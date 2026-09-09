@@ -1,7 +1,8 @@
 ---
 # Phase 4: Deploy disconnected Satellite Server with IOP
-# Provisions a RHEL 9 EC2 instance in a private subnet, installs
-# Satellite, configures ISS Network Sync from the connected upstream,
+# Requires: 01-provision-networking.yml, 02-deploy-satellite.yml, 03-configure-satellite.yml
+# Provisions a RHEL 9 EC2 instance in the private subnet (created in phase 01),
+# installs Satellite, configures ISS Network Sync from the connected upstream,
 # and enables Lightspeed on-prem (Advisor + Vulnerability).
 
 # --- Play 1: Provision disconnected Satellite EC2 ---
@@ -13,32 +14,13 @@
   vars_files:
     - vars/aws.yml
     - vars/aws_resources.yml
+    - vars/satellite_resources.yml
     - ../inventory/group_vars/all.yml
     - ../inventory/group_vars/satellite.yml
     - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
 
   tasks:
-    - name: Create disconnected private subnet
-      amazon.aws.ec2_vpc_subnet:
-        vpc_id: "{{ vpc_id }}"
-        cidr: "{{ disconnected_subnet_cidr }}"
-        az: "{{ aws_availability_zone }}"
-        region: "{{ aws_region }}"
-        map_public: false
-        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-subnet'}) }}"
-        state: present
-      register: disconnected_subnet
-
-    - name: Create route table for disconnected subnet (VPC-only, no internet)
-      amazon.aws.ec2_vpc_route_table:
-        vpc_id: "{{ vpc_id }}"
-        region: "{{ aws_region }}"
-        subnets:
-          - "{{ disconnected_subnet.subnet.id }}"
-        tags: "{{ aws_tags | combine({'Name': 'patching-poc-disconnected-rt'}) }}"
-        state: present
-
     - name: Create disconnected Satellite security group
       amazon.aws.ec2_security_group:
         name: patching-poc-disconnected-satellite-sg
@@ -75,7 +57,7 @@
         instance_type: "{{ disconnected_satellite_instance_type }}"
         image_id: "{{ dsat_ami_id }}"
         region: "{{ aws_region }}"
-        vpc_subnet_id: "{{ disconnected_subnet.subnet.id }}"
+        vpc_subnet_id: "{{ disconnected_subnet_id }}"
         security_group: "{{ dsat_sg.group_id }}"
         network:
           assign_public_ip: false
@@ -95,25 +77,25 @@
         state: running
       register: dsat_instance
 
-    - name: Save disconnected Satellite and subnet details
+    - name: Save disconnected Satellite instance details
       ansible.builtin.copy:
         content: |
           ---
           disconnected_satellite_instance_id: "{{ dsat_instance.instances[0].instance_id }}"
           disconnected_satellite_private_ip: "{{ dsat_instance.instances[0].private_ip_address }}"
-          disconnected_subnet_id: "{{ disconnected_subnet.subnet.id }}"
         dest: "{{ playbook_dir }}/vars/disconnected_satellite_resources.yml"
 
-    - name: Wait for SSH on disconnected Satellite via bastion
-      ansible.builtin.wait_for:
-        host: "{{ dsat_instance.instances[0].private_ip_address }}"
-        port: 22
-        delay: 30
-        timeout: 600
-      delegate_to: "{{ satellite_public_ip }}"
-      vars:
-        ansible_user: ec2-user
-        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+    - name: Generate SSH config for disconnected subnet access
+      ansible.builtin.copy:
+        content: |
+          Host {{ dsat_instance.instances[0].private_ip_address }}
+            User ec2-user
+            IdentityFile ~/.ssh/{{ aws_key_name }}.pem
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyCommand ssh -i ~/.ssh/{{ aws_key_name }}.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@{{ satellite_public_ip }}
+        dest: "{{ playbook_dir }}/.ssh_config_disconnected"
+        mode: "0600"
 
     - name: Add disconnected Satellite to in-memory inventory
       ansible.builtin.add_host:
@@ -121,7 +103,7 @@
         groups: disconnected_satellite
         ansible_user: ec2-user
         ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ProxyJump=ec2-user@{{ satellite_public_ip }}"
+        ansible_ssh_common_args: "-F {{ playbook_dir }}/.ssh_config_disconnected -o ControlMaster=no"
 
     - name: Add upstream Satellite to in-memory inventory
       ansible.builtin.add_host:
@@ -134,6 +116,7 @@
 - name: Install disconnected Satellite Server
   hosts: disconnected_satellite
   become: true
+  gather_facts: false
 
   vars_files:
     - vars/aws.yml
@@ -143,6 +126,15 @@
     - ../inventory/group_vars/satellite.yml
     - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
+
+  pre_tasks:
+    - name: Wait for SSH on disconnected Satellite via bastion
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 120
+
+    - name: Gather facts
+      ansible.builtin.setup:
 
   roles:
     - role: satellite_disconnected_deploy
@@ -215,19 +207,6 @@
           --upstream-organization-label "{{ disconnected_satellite_organization }}"
       changed_when: true
 
-    - name: Create Lifecycle Environments on downstream
-      redhat.satellite.lifecycle_environment:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
-        username: "{{ disconnected_satellite_admin_user }}"
-        password: "{{ disconnected_satellite_admin_password }}"
-        validate_certs: false
-        name: "{{ item.name }}"
-        prior: "{{ item.prior }}"
-        description: "{{ item.description }}"
-        organization: "{{ disconnected_satellite_organization }}"
-        state: present
-      loop: "{{ satellite_lifecycle_environments }}"
-
     - name: Enable RHEL 10 BaseOS repository on downstream
       redhat.satellite.repository_set:
         server_url: "https://{{ disconnected_satellite_hostname }}"
@@ -291,79 +270,19 @@
       async: 7200
       poll: 60
 
-    - name: Create RHEL10 Content View on downstream
-      redhat.satellite.content_view:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
-        username: "{{ disconnected_satellite_admin_user }}"
-        password: "{{ disconnected_satellite_admin_password }}"
-        validate_certs: false
-        name: "{{ satellite_content_view_name }}"
-        organization: "{{ disconnected_satellite_organization }}"
-        repositories: "{{ satellite_content_view_repos }}"
-        state: present
-
-    - name: Create RPM inclusion filter on downstream
-      redhat.satellite.content_view_filter:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
-        username: "{{ disconnected_satellite_admin_user }}"
-        password: "{{ disconnected_satellite_admin_password }}"
-        validate_certs: false
-        content_view: "{{ satellite_content_view_name }}"
-        organization: "{{ disconnected_satellite_organization }}"
-        name: "{{ satellite_cv_rpm_filter_name }}"
-        filter_type: rpm
-        inclusion: true
-        original_packages: true
-        state: present
-
-    - name: Create erratum-by-date inclusion filter on downstream
-      redhat.satellite.content_view_filter:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
-        username: "{{ disconnected_satellite_admin_user }}"
-        password: "{{ disconnected_satellite_admin_password }}"
-        validate_certs: false
-        content_view: "{{ satellite_content_view_name }}"
-        organization: "{{ disconnected_satellite_organization }}"
-        name: "{{ satellite_cv_filter_name }}"
-        filter_type: erratum
-        inclusion: true
-        state: present
-
-    - name: Publish and promote content view versions on downstream
-      ansible.builtin.include_tasks: publish_promote_downstream.yml
-      loop: "{{ satellite_cv_versions }}"
-      loop_control:
-        loop_var: cv_version
-
-    - name: Create Activation Keys on downstream
+    - name: Create AAP activation key on downstream
       redhat.satellite.activation_key:
         server_url: "https://{{ disconnected_satellite_hostname }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false
-        name: "{{ item.name }}"
+        name: "ak-aap"
         organization: "{{ disconnected_satellite_organization }}"
-        lifecycle_environment: "{{ item.lifecycle_environment }}"
-        content_view: "{{ item.content_view }}"
-        release_version: "{{ item.release_version }}"
-        auto_attach: "{{ item.auto_attach }}"
+        lifecycle_environment: "Library"
+        content_view: "Default Organization View"
+        release_version: "10"
+        auto_attach: true
         state: present
-      loop: "{{ satellite_activation_keys }}"
-
-    - name: Create Host Groups on downstream
-      redhat.satellite.hostgroup:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
-        username: "{{ disconnected_satellite_admin_user }}"
-        password: "{{ disconnected_satellite_admin_password }}"
-        validate_certs: false
-        name: "{{ item.name }}"
-        organization: "{{ disconnected_satellite_organization }}"
-        lifecycle_environment: "{{ item.lifecycle_environment | default(omit) }}"
-        content_view: "{{ item.content_view | default(omit) }}"
-        locations:
-          - "{{ disconnected_satellite_location }}"
-        state: present
-      loop: "{{ satellite_hostgroups }}"
 
 # --- Play 4: Enable IOP on disconnected Satellite ---
 - name: Export IOP container images from connected Satellite
@@ -373,56 +292,66 @@
   vars_files:
     - vars/aws.yml
     - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
     - ../inventory/group_vars/all.yml
     - ../credentials.yml
 
+  vars:
+    iop_images:
+      - registry.redhat.io/satellite/iop-ingress-rhel9:6.19
+      - registry.redhat.io/satellite/iop-advisor-frontend-rhel9:6.19
+      - registry.redhat.io/satellite/iop-advisor-backend-rhel9:6.19
+      - registry.redhat.io/satellite/iop-host-inventory-rhel9:6.19
+      - registry.redhat.io/satellite/iop-host-inventory-frontend-rhel9:6.19
+      - registry.redhat.io/satellite/iop-vmaas-rhel9:6.19
+      - registry.redhat.io/satellite/iop-yuptoo-rhel9:6.19
+      - registry.redhat.io/satellite/iop-puptoo-rhel9:6.19
+      - registry.redhat.io/satellite/iop-insights-engine-rhel9:6.19
+      - registry.redhat.io/satellite/iop-vulnerability-engine-rhel9:6.19
+      - registry.redhat.io/satellite/iop-vulnerability-frontend-rhel9:6.19
+      - registry.redhat.io/satellite/iop-gateway-rhel9:6.19
+      - registry.redhat.io/satellite/iop-remediations-rhel9:6.19
+      - registry.redhat.io/amq-streams/kafka-39-rhel9:2.9.1-1
+
   tasks:
-    - name: List IOP container images on connected Satellite
+    - name: Log in to registry.redhat.io on connected Satellite
+      containers.podman.podman_login:
+        registry: registry.redhat.io
+        username: "{{ registry_username }}"
+        password: "{{ registry_password }}"
+
+    - name: Pull IOP container images on connected Satellite
+      containers.podman.podman_image:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ iop_images }}"
+      register: iop_pull_results
+      ignore_errors: true
+
+    - name: Report any failed IOP image pulls
+      ansible.builtin.debug:
+        msg: "WARNING: Could not pull {{ item.item }} — image may not exist for this Satellite version"
+      loop: "{{ iop_pull_results.results | selectattr('failed', 'defined') | selectattr('failed') | list }}"
+      when: iop_pull_results.results | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+
+    - name: Get list of successfully pulled IOP images
       ansible.builtin.shell:
-        cmd: podman images --format '{{ "{{" }}.Repository{{ "}}" }}:{{ "{{" }}.Tag{{ "}}" }}' | grep -E '(iop|kafka)' || true
-      register: iop_images
+        cmd: "podman images --format '{{'{{'}}.Repository{{'}}'}}:{{'{{'}}.Tag{{'}}'}}' | grep -E '(iop|kafka)'"
+      register: pulled_images
       changed_when: false
 
     - name: Save IOP container images to archive
-      ansible.builtin.shell:
-        cmd: >
-          podman save -m
-          $(podman images --format '{{ "{{" }}.Repository{{ "}}" }}:{{ "{{" }}.Tag{{ "}}" }}' | grep -E '(iop|kafka)')
-          -o /root/iop-images.tar
-      when: iop_images.stdout_lines | length > 0
-      changed_when: true
+      ansible.builtin.command:
+        cmd: "podman save -m -o /root/iop-images.tar {{ pulled_images.stdout_lines | join(' ') }}"
+        creates: /root/iop-images.tar
+      when: pulled_images.stdout_lines | length > 0
 
-    - name: Pull IOP images from registry if not present locally
-      ansible.builtin.shell:
-        cmd: |
-          images=(
-            "registry.redhat.io/satellite/iop-ingress-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-advisor-frontend-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-host-inventory-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-host-inventory-frontend-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-vmaas-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-advisor-backend-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-notifications-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-yuptoo-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-insights-engine-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-vulnerability-engine-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-gateway-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-core-engine-rhel9:6.19"
-            "registry.redhat.io/satellite/iop-remediations-rhel9:6.19"
-            "registry.redhat.io/amq-streams/kafka-39-rhel9:2.9.1-1"
-          )
-          for img in "${images[@]}"; do
-            podman pull "$img" 2>/dev/null || true
-          done
-          podman save -m ${images[@]} -o /root/iop-images.tar
-      when: iop_images.stdout_lines | length == 0
-      changed_when: true
-
-    - name: Fetch IOP images archive to controller
-      ansible.builtin.fetch:
+    - name: Copy IOP images archive to Satellite pub directory
+      ansible.builtin.copy:
         src: /root/iop-images.tar
-        dest: /tmp/iop-images.tar
-        flat: true
+        dest: /var/www/html/pub/iop-images.tar
+        mode: "0644"
+        remote_src: true
 
 - name: Load IOP images and enable on disconnected Satellite
   hosts: disconnected_satellite
@@ -437,15 +366,17 @@
     - ../credentials.yml
 
   tasks:
-    - name: Copy IOP images archive to disconnected Satellite
-      ansible.builtin.copy:
-        src: /tmp/iop-images.tar
-        dest: /root/iop-images.tar
+    - name: Download IOP images from connected Satellite
+      ansible.builtin.get_url:
+        url: "https://{{ satellite_private_ip }}/pub/iop-images.tar"
+        dest: /tmp/iop-images.tar
+        validate_certs: false
         mode: "0644"
+        timeout: 600
 
     - name: Load IOP container images
       ansible.builtin.command:
-        cmd: podman load -i /root/iop-images.tar
+        cmd: podman load -i /tmp/iop-images.tar
       changed_when: true
 
     - name: Enable IOP via satellite-installer
