@@ -6,8 +6,9 @@
 # with errata and RPM filters, publishes and promotes CV versions through
 # the LCEs, and creates activation keys and host groups.
 #
-# This runs from localhost against the disconnected Satellite API
-# via ProxyJump through the connected Satellite.
+# The disconnected Satellite has no public IP. An SSH tunnel is opened
+# through the connected Satellite so the redhat.satellite modules can
+# reach the API from localhost.
 - name: Configure RHEL10 content on disconnected Satellite
   hosts: localhost
   connection: local
@@ -15,17 +16,53 @@
 
   vars_files:
     - vars/aws.yml
+    - vars/satellite_resources.yml
     - vars/disconnected_satellite_resources.yml
     - vars/disconnected_content.yml
     - ../inventory/group_vars/all.yml
     - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
 
+  vars:
+    tunnel_local_port: 14443
+    disconnected_sat_api: "https://localhost:{{ tunnel_local_port }}"
+
   tasks:
+    - name: Kill any stale SSH tunnel on port {{ tunnel_local_port }}
+      ansible.builtin.shell:
+        cmd: "kill $(lsof -ti tcp:{{ tunnel_local_port }}) 2>/dev/null || true"
+      changed_when: false
+
+    - name: Wait for port to be released
+      ansible.builtin.wait_for:
+        host: localhost
+        port: "{{ tunnel_local_port }}"
+        state: stopped
+        timeout: 10
+      ignore_errors: true
+
+    - name: Open SSH tunnel to disconnected Satellite API
+      ansible.builtin.shell:
+        cmd: >
+          ssh -f -N
+          -L {{ tunnel_local_port }}:{{ disconnected_satellite_private_ip }}:443
+          -i ~/.ssh/{{ aws_key_name }}.pem
+          -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null
+          ec2-user@{{ satellite_public_ip }}
+      changed_when: true
+
+    - name: Wait for tunnel to be ready
+      ansible.builtin.wait_for:
+        host: localhost
+        port: "{{ tunnel_local_port }}"
+        delay: 2
+        timeout: 15
+
     # --- Lifecycle Environments ---
     - name: Create Lifecycle Environments on disconnected Satellite
       redhat.satellite.lifecycle_environment:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
+        server_url: "{{ disconnected_sat_api }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false
@@ -39,7 +76,7 @@
     # --- Content View ---
     - name: Create RHEL10 Content View
       redhat.satellite.content_view:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
+        server_url: "{{ disconnected_sat_api }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false
@@ -50,7 +87,7 @@
 
     - name: Create RPM inclusion filter
       redhat.satellite.content_view_filter:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
+        server_url: "{{ disconnected_sat_api }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false
@@ -64,7 +101,7 @@
 
     - name: Create erratum-by-date inclusion filter
       redhat.satellite.content_view_filter:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
+        server_url: "{{ disconnected_sat_api }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false
@@ -85,7 +122,7 @@
     # --- Activation Keys ---
     - name: Create Activation Keys
       redhat.satellite.activation_key:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
+        server_url: "{{ disconnected_sat_api }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false
@@ -101,7 +138,7 @@
     # --- Host Groups ---
     - name: Create Host Groups
       redhat.satellite.hostgroup:
-        server_url: "https://{{ disconnected_satellite_hostname }}"
+        server_url: "{{ disconnected_sat_api }}"
         username: "{{ disconnected_satellite_admin_user }}"
         password: "{{ disconnected_satellite_admin_password }}"
         validate_certs: false

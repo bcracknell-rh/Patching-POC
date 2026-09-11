@@ -1,6 +1,133 @@
-Host 10.0.2.49
+Host 10.0.2.9
   User ec2-user
   IdentityFile ~/.ssh/patching-poc.pem
   StrictHostKeyChecking no
   UserKnownHostsFile /dev/null
-  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@3.107.223.38
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+Host 10.0.2.77
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+Host 10.0.2.139
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.225
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.181
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.139
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.225
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.181
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.139
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.225
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.181
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.139
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.225
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.181
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.139
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.225
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+
+
+Host 10.0.2.181
+  User ec2-user
+  IdentityFile ~/.ssh/patching-poc.pem
+  StrictHostKeyChecking no
+  UserKnownHostsFile /dev/null
+  ProxyCommand ssh -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@52.62.218.11
+

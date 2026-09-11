@@ -90,18 +90,6 @@
       loop: "{{ patching_vms }}"
       register: vm_instances
 
-    - name: Wait for SSH on all VMs via upstream Satellite bastion
-      ansible.builtin.wait_for:
-        host: "{{ item.instances[0].private_ip_address }}"
-        port: 22
-        delay: 30
-        timeout: 600
-      delegate_to: "{{ satellite_public_ip }}"
-      vars:
-        ansible_user: ec2-user
-        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
-      loop: "{{ vm_instances.results }}"
-
     - name: Add VM host entries to SSH config for disconnected subnet
       ansible.builtin.lineinfile:
         path: "{{ playbook_dir }}/.ssh_config_disconnected"
@@ -132,6 +120,7 @@
 - name: Register RHEL 10.2 VMs with disconnected Satellite
   hosts: patching_vms
   become: true
+  gather_facts: false
 
   vars_files:
     - vars/aws.yml
@@ -144,6 +133,14 @@
     dsat_server_url: "https://{{ disconnected_satellite_private_ip }}"
 
   tasks:
+    - name: Wait for SSH on VMs via ProxyCommand
+      ansible.builtin.wait_for_connection:
+        delay: 30
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
     - name: Add disconnected Satellite to /etc/hosts
       ansible.builtin.lineinfile:
         path: /etc/hosts
@@ -167,25 +164,32 @@
 
     - name: Register with disconnected Satellite using activation key
       community.general.redhat_subscription:
-        server_hostname: "{{ disconnected_satellite_private_ip }}"
+        server_hostname: "{{ disconnected_satellite_hostname }}"
         org_id: "{{ disconnected_satellite_organization }}"
         activationkey: "{{ activation_key }}"
         state: present
 
-    - name: Install katello-host-tools for errata reporting
-      ansible.builtin.dnf:
-        name:
-          - katello-host-tools
-          - katello-host-tools-tracer
-        state: present
+    - name: Disable RHUI repositories (unreachable in disconnected subnet)
+      ansible.builtin.shell: |
+        dnf config-manager --set-disabled '*rhui*' 2>/dev/null || true
+      changed_when: true
+
+    - name: Fetch Satellite remote execution SSH public key
+      ansible.builtin.command:
+        cmd: cat /var/lib/foreman-proxy/ssh/id_rsa_foreman_proxy.pub
+      register: rex_pubkey
+      delegate_to: "{{ disconnected_satellite_private_ip }}"
+      delegate_facts: false
+      run_once: true
+      vars:
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/patching-poc.pem"
+        ansible_ssh_common_args: "-F {{ playbook_dir }}/.ssh_config_disconnected -o ControlMaster=no"
+        ansible_become: true
+      changed_when: false
 
     - name: Enable and start remote execution (SSH)
       ansible.builtin.authorized_key:
         user: root
         state: present
-        key: "{{ lookup('url', dsat_server_url + '/ssh/pubkey', validate_certs=false) }}"
-
-    - name: Run initial package profile upload
-      ansible.builtin.command:
-        cmd: katello-package-upload
-      changed_when: true
+        key: "{{ rex_pubkey.stdout }}"

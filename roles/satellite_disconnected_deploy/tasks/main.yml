@@ -78,16 +78,22 @@
     dev: "{{ disconnected_satellite_data_device }}"
   when: pulp_mounted.rc != 0
 
+- name: Get UUID of data volume
+  ansible.builtin.command:
+    cmd: "blkid -s UUID -o value {{ disconnected_satellite_data_device }}"
+  register: data_volume_uuid
+  changed_when: false
+
 - name: Create mount point for Pulp data
   ansible.builtin.file:
     path: "{{ disconnected_satellite_data_mount }}"
     state: directory
     mode: "0755"
 
-- name: Mount Pulp data volume
+- name: Mount Pulp data volume by UUID (survives device name changes on reboot)
   ansible.posix.mount:
     path: "{{ disconnected_satellite_data_mount }}"
-    src: "{{ disconnected_satellite_data_device }}"
+    src: "UUID={{ data_volume_uuid.stdout }}"
     fstype: xfs
     state: mounted
 

@@ -5,7 +5,7 @@
 # AAP is provisioned in the private subnet with no public IP.
 # SSH access is via ProxyJump through the connected Satellite.
 # AAP registers to the disconnected Satellite (not CDN).
-# Run from local desktop: ansible-playbook playbooks/06-deploy-aap.yml
+# Run from local desktop: ansible-playbook playbooks/07-deploy-aap.yml
 - name: Deploy AAP 2.7 Controller in disconnected subnet
   hosts: localhost
   connection: local
@@ -73,17 +73,6 @@
         state: running
       register: aap_instance
 
-    - name: Wait for SSH on AAP via connected Satellite bastion
-      ansible.builtin.wait_for:
-        host: "{{ aap_instance.instances[0].private_ip_address }}"
-        port: 22
-        delay: 30
-        timeout: 600
-      delegate_to: "{{ satellite_public_ip }}"
-      vars:
-        ansible_user: ec2-user
-        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
-
     - name: Add AAP host entry to SSH config for disconnected subnet
       ansible.builtin.lineinfile:
         path: "{{ playbook_dir }}/.ssh_config_disconnected"
@@ -117,6 +106,7 @@
 - name: Configure AAP Controller instance
   hosts: aap
   become: true
+  gather_facts: false
 
   vars_files:
     - vars/aws.yml
@@ -126,6 +116,15 @@
     - ../inventory/group_vars/aap.yml
     - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
+
+  pre_tasks:
+    - name: Wait for SSH on AAP via ProxyCommand
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
 
   roles:
     - role: aap_bootstrap

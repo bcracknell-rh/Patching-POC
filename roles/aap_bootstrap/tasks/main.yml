@@ -22,15 +22,10 @@
 
 - name: Register with disconnected Satellite using activation key
   community.general.redhat_subscription:
-    server_hostname: "{{ disconnected_satellite_private_ip }}"
+    server_hostname: "{{ disconnected_satellite_hostname }}"
     org_id: "{{ disconnected_satellite_organization }}"
     activationkey: "{{ aap_activation_key }}"
     state: present
-
-- name: Set release version for EUS repos
-  ansible.builtin.command:
-    cmd: subscription-manager release --set=10.2
-  changed_when: true
 
 - name: Enable required repositories for AAP 2.7
   community.general.rhsm_repository:
@@ -41,6 +36,11 @@
 - name: Clean dnf cache
   ansible.builtin.command:
     cmd: dnf clean all
+  changed_when: true
+
+- name: Disable RHUI repositories (unreachable in disconnected subnet)
+  ansible.builtin.shell: |
+    dnf config-manager --set-disabled '*rhui*' 2>/dev/null || true
   changed_when: true
 
 - name: Install prerequisite packages for containerized AAP

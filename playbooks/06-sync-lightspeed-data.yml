@@ -5,28 +5,54 @@
 # Run this playbook periodically (e.g. weekly via AAP schedule) to keep
 # CVE data current on the disconnected Satellite.
 
-- name: Fetch cvemap.xml from connected Satellite
-  hosts: satellite
-  become: true
+# --- Play 1: Build in-memory inventory ---
+- name: Set up host inventory for cvemap sync
+  hosts: localhost
+  connection: local
+  gather_facts: false
 
   vars_files:
     - vars/aws.yml
     - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
     - ../inventory/group_vars/all.yml
     - ../credentials.yml
 
   tasks:
-    - name: Add upstream Satellite to in-memory inventory (standalone run)
+    - name: Add connected Satellite to in-memory inventory
       ansible.builtin.add_host:
         name: "{{ satellite_public_ip }}"
         groups: satellite
-        ansible_host: "{{ satellite_public_ip }}"
         ansible_user: ec2-user
         ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
-      when: satellite_public_ip is defined
-      delegate_to: localhost
-      run_once: true
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
+    - name: Generate SSH config for disconnected subnet access
+      ansible.builtin.copy:
+        content: |
+          Host {{ disconnected_satellite_private_ip }}
+            User ec2-user
+            IdentityFile ~/.ssh/{{ aws_key_name }}.pem
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+            ProxyCommand ssh -i ~/.ssh/{{ aws_key_name }}.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@{{ satellite_public_ip }}
+        dest: "{{ playbook_dir }}/.ssh_config_disconnected"
+        mode: "0600"
+
+    - name: Add disconnected Satellite to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ disconnected_satellite_private_ip }}"
+        groups: disconnected_satellite
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
+        ansible_ssh_common_args: "-F {{ playbook_dir }}/.ssh_config_disconnected -o ControlMaster=no"
+
+# --- Play 2: Fetch cvemap from connected Satellite ---
+- name: Fetch cvemap.xml from connected Satellite
+  hosts: satellite
+  become: true
+
+  tasks:
     - name: Check cvemap.xml exists on connected Satellite
       ansible.builtin.stat:
         path: /var/lib/foreman/cvemap.xml
@@ -45,9 +71,11 @@
         dest: /tmp/cvemap.xml
         flat: true
 
+# --- Play 3: Push cvemap to disconnected Satellite ---
 - name: Push cvemap.xml to disconnected Satellite
   hosts: disconnected_satellite
   become: true
+  gather_facts: false
 
   vars_files:
     - vars/aws.yml
@@ -58,18 +86,6 @@
     - ../credentials.yml
 
   tasks:
-    - name: Add disconnected Satellite to in-memory inventory (standalone run)
-      ansible.builtin.add_host:
-        name: "{{ disconnected_satellite_private_ip }}"
-        groups: disconnected_satellite
-        ansible_host: "{{ disconnected_satellite_private_ip }}"
-        ansible_user: ec2-user
-        ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
-        ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o ProxyJump=ec2-user@{{ satellite_public_ip }}"
-      when: disconnected_satellite_private_ip is defined
-      delegate_to: localhost
-      run_once: true
-
     - name: Copy cvemap.xml to disconnected Satellite
       ansible.builtin.copy:
         src: /tmp/cvemap.xml
@@ -99,4 +115,3 @@
         msg: >
           cvemap.xml synced to disconnected Satellite.
           Vulnerability data will be refreshed shortly.
-          Next run this playbook again when new CVE data is available.

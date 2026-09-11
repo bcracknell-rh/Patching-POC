@@ -72,7 +72,7 @@
         organization: "Patching-POC"
         credential_type: "Satellite Credentials"
         inputs:
-          satellite_url: "https://{{ disconnected_satellite_private_ip }}"
+          satellite_url: "https://{{ disconnected_satellite_hostname }}"
           satellite_username: "{{ disconnected_satellite_admin_user }}"
           satellite_password: "{{ disconnected_satellite_admin_password }}"
         state: present

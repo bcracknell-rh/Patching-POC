@@ -259,6 +259,42 @@
         content_type: yum
         state: present
 
+    - name: Enable AAP 2.7 repository on downstream via ISS
+      redhat.satellite.repository_set:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "Red Hat Ansible Automation Platform 2.7 for RHEL 10 x86_64 (RPMs)"
+        organization: "{{ disconnected_satellite_organization }}"
+        product: "Red Hat Ansible Automation Platform"
+        all_repositories: true
+        state: enabled
+
+    - name: Set download policy to on_demand for AAP repo on downstream
+      redhat.satellite.repository:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        name: "Red Hat Ansible Automation Platform 2.7 for RHEL 10 x86_64 RPMs"
+        product: "Red Hat Ansible Automation Platform"
+        organization: "{{ disconnected_satellite_organization }}"
+        download_policy: on_demand
+        content_type: yum
+        state: present
+
+    - name: Sync AAP 2.7 repository from upstream
+      redhat.satellite.repository_sync:
+        server_url: "https://{{ disconnected_satellite_hostname }}"
+        username: "{{ disconnected_satellite_admin_user }}"
+        password: "{{ disconnected_satellite_admin_password }}"
+        validate_certs: false
+        product: "Red Hat Ansible Automation Platform"
+        organization: "{{ disconnected_satellite_organization }}"
+      async: 7200
+      poll: 60
+
     - name: Sync RHEL 10 repositories from upstream
       redhat.satellite.repository_sync:
         server_url: "https://{{ disconnected_satellite_hostname }}"
@@ -282,6 +318,9 @@
         content_view: "Default Organization View"
         release_version: "10"
         auto_attach: true
+        content_overrides:
+          - label: ansible-automation-platform-2.7-for-rhel-10-x86_64-rpms
+            override: enabled
         state: present
 
 # --- Play 4: Enable IOP on disconnected Satellite ---
