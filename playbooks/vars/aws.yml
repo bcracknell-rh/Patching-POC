@@ -127,3 +127,8 @@ disconnected_satellite_security_group_rules:
     to_port: 69
     cidr_ip: 10.0.2.0/24
     rule_desc: TFTP
+  - proto: tcp
+    from_port: 3000
+    to_port: 3000
+    cidr_ip: 10.0.0.0/16
+    rule_desc: Gitea Git Server

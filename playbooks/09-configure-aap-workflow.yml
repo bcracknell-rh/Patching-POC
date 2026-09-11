@@ -6,11 +6,14 @@
 # needed for the Dev -> QA -> Prod patching lifecycle.
 #
 # AAP has no public IP. Before running this phase, open an SSH tunnel:
-#   ssh -f -N -L 8443:<aap_private_ip>:443 ec2-user@<satellite_public_ip>
-# Then set aap_hostname to https://localhost:8443 below (or via extra-vars).
+#   ssh -f -N -L 8443:<aap_private_ip>:443 \
+#     -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no \
+#     -o UserKnownHostsFile=/dev/null ec2-user@<satellite_public_ip>
+# Then set aap_tunnel_url to https://localhost:8443 below (or via extra-vars).
 #
-# AAP 2.7 uses the ansible.platform collection with the unified
-# platform gateway API. Direct component API access is removed.
+# AAP 2.7 uses:
+#   - ansible.platform for Gateway resources (organizations, RBAC)
+#   - ansible.controller for Controller resources (credentials, templates, workflows)
 - name: Configure AAP Patching Workflow
   hosts: localhost
   connection: local
@@ -26,21 +29,33 @@
     - ../inventory/group_vars/disconnected_satellite.yml
     - ../credentials.yml
 
+  vars:
+    aap_gw_url: "{{ aap_tunnel_url | default('https://localhost:8443') }}"
+    gitea_url: "http://{{ disconnected_satellite_hostname }}:3000"
+    gitea_repo_url: "{{ gitea_url }}/patching-poc/patching-poc-playbooks.git"
+
   module_defaults:
     group/ansible.platform.gateway:
-      aap_hostname: "{{ aap_tunnel_url | default('https://localhost:8443') }}"
+      aap_hostname: "{{ aap_gw_url }}"
       aap_username: "{{ aap_admin_user }}"
       aap_password: "{{ aap_admin_password }}"
       aap_validate_certs: false
+    group/ansible.controller.controller:
+      controller_host: "{{ aap_gw_url }}"
+      controller_username: "{{ aap_admin_user }}"
+      controller_password: "{{ aap_admin_password }}"
+      validate_certs: false
 
   tasks:
+    # --- Gateway-level resources (ansible.platform) ---
     - name: Create Patching POC organization in AAP
       ansible.platform.organization:
         name: "Patching-POC"
         state: present
 
+    # --- Controller resources (ansible.controller) ---
     - name: Create Satellite credential type
-      ansible.platform.credential_type:
+      ansible.controller.credential_type:
         name: "Satellite Credentials"
         kind: cloud
         inputs:
@@ -67,7 +82,7 @@
         state: present
 
     - name: Create Satellite credential
-      ansible.platform.credential:
+      ansible.controller.credential:
         name: "Satellite 6.19"
         organization: "Patching-POC"
         credential_type: "Satellite Credentials"
@@ -78,7 +93,7 @@
         state: present
 
     - name: Create Machine credential for managed hosts
-      ansible.platform.credential:
+      ansible.controller.credential:
         name: "Patching POC SSH Key"
         organization: "Patching-POC"
         credential_type: "Machine"
@@ -88,23 +103,46 @@
           become_method: sudo
         state: present
 
-    - name: Create project (archive upload — no GitHub in disconnected zone)
-      ansible.platform.project:
+    - name: Push playbooks to Gitea on disconnected Satellite
+      ansible.builtin.shell: |
+        set -e
+        WORK=$(mktemp -d)
+        cp -r {{ playbook_dir }}/../playbooks {{ playbook_dir }}/../roles {{ playbook_dir }}/../inventory "$WORK/"
+        cd "$WORK"
+        git init -b main
+        git config user.email "admin@patching-poc.internal"
+        git config user.name "Patching POC"
+        git add -A
+        git commit -m "Playbook sync $(date +%Y%m%d-%H%M%S)"
+        git remote add origin http://gitea-admin:{{ satellite_admin_password | urlencode }}@localhost:3000/patching-poc/patching-poc-playbooks.git
+        git push -f origin main
+        rm -rf "$WORK"
+      delegate_to: "{{ disconnected_satellite_private_ip }}"
+      delegate_facts: false
+      vars:
+        ansible_user: ec2-user
+        ansible_ssh_private_key_file: "~/.ssh/patching-poc.pem"
+        ansible_ssh_common_args: "-F {{ playbook_dir }}/.ssh_config_disconnected -o ControlMaster=no"
+      changed_when: true
+
+    - name: Create project from Gitea repository
+      ansible.controller.project:
         name: "Patching POC Playbooks"
         organization: "Patching-POC"
-        scm_type: archive
-        scm_url: "{{ patching_poc_archive_url | default('https://internal-git.vpc.local/patching-poc/archive/main.tar.gz') }}"
-        scm_update_on_launch: false
+        scm_type: git
+        scm_url: "{{ gitea_repo_url }}"
+        scm_branch: main
+        scm_update_on_launch: true
         state: present
 
     - name: Create dynamic inventory from Satellite
-      ansible.platform.inventory:
+      ansible.controller.inventory:
         name: "Satellite Managed Hosts"
         organization: "Patching-POC"
         state: present
 
     - name: Create inventory source from Satellite
-      ansible.platform.inventory_source:
+      ansible.controller.inventory_source:
         name: "Satellite 6.19"
         inventory: "Satellite Managed Hosts"
         organization: "Patching-POC"
@@ -124,7 +162,7 @@
         state: present
 
     - name: Create Job Template - Publish Content View
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Publish Content View"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -138,7 +176,7 @@
         state: present
 
     - name: Create Job Template - Promote to Dev
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Promote to Dev"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -153,7 +191,7 @@
         state: present
 
     - name: Create Job Template - Promote to QA
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Promote to QA"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -168,7 +206,7 @@
         state: present
 
     - name: Create Job Template - Promote to Prod
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Promote to Prod"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -183,7 +221,7 @@
         state: present
 
     - name: Create Job Template - Apply Patches (Dev)
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Apply Errata (Dev)"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -196,7 +234,7 @@
         state: present
 
     - name: Create Job Template - Apply Patches (QA)
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Apply Errata (QA)"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -209,7 +247,7 @@
         state: present
 
     - name: Create Job Template - Apply Patches (Prod)
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Apply Errata (Prod)"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -222,7 +260,7 @@
         state: present
 
     - name: Create Job Template - Validate Hosts
-      ansible.platform.job_template:
+      ansible.controller.job_template:
         name: "Patch - Validate Hosts"
         organization: "Patching-POC"
         project: "Patching POC Playbooks"
@@ -233,80 +271,119 @@
         state: present
 
     - name: Create Patching Workflow Template
-      ansible.platform.workflow_job_template:
+      ansible.controller.workflow_job_template:
         name: "RHEL 10 Patching Cadence"
         organization: "Patching-POC"
         inventory: "Satellite Managed Hosts"
         survey_enabled: false
+        schema:
+          - identifier: publish_cv
+            unified_job_template:
+              name: "Patch - Publish Content View"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: promote_dev
+          - identifier: promote_dev
+            unified_job_template:
+              name: "Patch - Promote to Dev"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: apply_dev
+          - identifier: apply_dev
+            unified_job_template:
+              name: "Patch - Apply Errata (Dev)"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: validate_dev
+          - identifier: validate_dev
+            unified_job_template:
+              name: "Patch - Validate Hosts"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: approve_qa
+          - identifier: approve_qa
+            approval_node:
+              name: "Approve QA Promotion"
+              description: "Approve promotion of patches from Dev to QA"
+              timeout: 0
+            related:
+              success_nodes:
+                - identifier: promote_qa
+          - identifier: promote_qa
+            unified_job_template:
+              name: "Patch - Promote to QA"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: apply_qa
+          - identifier: apply_qa
+            unified_job_template:
+              name: "Patch - Apply Errata (QA)"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: validate_qa
+          - identifier: validate_qa
+            unified_job_template:
+              name: "Patch - Validate Hosts"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: approve_prod
+          - identifier: approve_prod
+            approval_node:
+              name: "Approve Prod Promotion"
+              description: "Approve promotion of patches from QA to Prod"
+              timeout: 0
+            related:
+              success_nodes:
+                - identifier: promote_prod
+          - identifier: promote_prod
+            unified_job_template:
+              name: "Patch - Promote to Prod"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: apply_prod
+          - identifier: apply_prod
+            unified_job_template:
+              name: "Patch - Apply Errata (Prod)"
+              organization:
+                name: "Patching-POC"
+              type: job_template
+            related:
+              success_nodes:
+                - identifier: validate_prod
+          - identifier: validate_prod
+            unified_job_template:
+              name: "Patch - Validate Hosts"
+              organization:
+                name: "Patching-POC"
+              type: job_template
         state: present
-
-    - name: Build workflow nodes
-      ansible.platform.workflow_job_template_node:
-        workflow_job_template: "RHEL 10 Patching Cadence"
-        organization: "Patching-POC"
-        identifier: "{{ item.identifier }}"
-        unified_job_template: "{{ item.template }}"
-        approval_node: "{{ item.approval | default(omit) }}"
-        success_nodes: "{{ item.success_nodes | default(omit) }}"
-        state: present
-      loop:
-        - identifier: publish_cv
-          template: "Patch - Publish Content View"
-          success_nodes:
-            - promote_dev
-        - identifier: promote_dev
-          template: "Patch - Promote to Dev"
-          success_nodes:
-            - apply_dev
-        - identifier: apply_dev
-          template: "Patch - Apply Errata (Dev)"
-          success_nodes:
-            - validate_dev
-        - identifier: validate_dev
-          template: "Patch - Validate Hosts"
-          success_nodes:
-            - approve_qa
-        - identifier: approve_qa
-          template: "Approve QA Promotion"
-          approval:
-            name: "Approve QA Promotion"
-            description: "Approve promotion of patches from Dev to QA"
-            timeout: 0
-          success_nodes:
-            - promote_qa
-        - identifier: promote_qa
-          template: "Patch - Promote to QA"
-          success_nodes:
-            - apply_qa
-        - identifier: apply_qa
-          template: "Patch - Apply Errata (QA)"
-          success_nodes:
-            - validate_qa
-        - identifier: validate_qa
-          template: "Patch - Validate Hosts"
-          success_nodes:
-            - approve_prod
-        - identifier: approve_prod
-          template: "Approve Prod Promotion"
-          approval:
-            name: "Approve Prod Promotion"
-            description: "Approve promotion of patches from QA to Prod"
-            timeout: 0
-          success_nodes:
-            - promote_prod
-        - identifier: promote_prod
-          template: "Patch - Promote to Prod"
-          success_nodes:
-            - apply_prod
-        - identifier: apply_prod
-          template: "Patch - Apply Errata (Prod)"
-          success_nodes:
-            - validate_prod
-        - identifier: validate_prod
-          template: "Patch - Validate Hosts"
 
     - name: Create schedule for weekly Dev/QA patching
-      ansible.platform.schedule:
+      ansible.controller.schedule:
         name: "Weekly Patch Cycle (Dev/QA)"
         unified_job_template: "RHEL 10 Patching Cadence"
         rrule: "DTSTART:20260901T060000Z RRULE:FREQ=WEEKLY;BYDAY=TU"

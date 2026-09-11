@@ -91,10 +91,10 @@
       register: vm_instances
 
     - name: Add VM host entries to SSH config for disconnected subnet
-      ansible.builtin.lineinfile:
+      ansible.builtin.blockinfile:
         path: "{{ playbook_dir }}/.ssh_config_disconnected"
-        line: |
-
+        marker: "# {mark} MANAGED BLOCK {{ item.instances[0].private_ip_address }}"
+        block: |
           Host {{ item.instances[0].private_ip_address }}
             User ec2-user
             IdentityFile ~/.ssh/{{ aws_key_name }}.pem

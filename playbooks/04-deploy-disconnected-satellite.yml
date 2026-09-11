@@ -85,16 +85,25 @@
           disconnected_satellite_private_ip: "{{ dsat_instance.instances[0].private_ip_address }}"
         dest: "{{ playbook_dir }}/vars/disconnected_satellite_resources.yml"
 
-    - name: Generate SSH config for disconnected subnet access
+    - name: Ensure SSH config file exists for disconnected subnet
       ansible.builtin.copy:
-        content: |
+        content: "# Managed by Patching-POC playbooks\n"
+        dest: "{{ playbook_dir }}/.ssh_config_disconnected"
+        mode: "0600"
+        force: false
+
+    - name: Add disconnected Satellite to SSH config
+      ansible.builtin.blockinfile:
+        path: "{{ playbook_dir }}/.ssh_config_disconnected"
+        marker: "# {mark} MANAGED BLOCK {{ dsat_instance.instances[0].private_ip_address }}"
+        block: |
           Host {{ dsat_instance.instances[0].private_ip_address }}
             User ec2-user
             IdentityFile ~/.ssh/{{ aws_key_name }}.pem
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ProxyCommand ssh -i ~/.ssh/{{ aws_key_name }}.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@{{ satellite_public_ip }}
-        dest: "{{ playbook_dir }}/.ssh_config_disconnected"
+        create: true
         mode: "0600"
 
     - name: Add disconnected Satellite to in-memory inventory
@@ -443,3 +452,237 @@
       ansible.builtin.file:
         path: /root/iop-images.tar
         state: absent
+
+# --- Play 6: Download Gitea binary on localhost (has internet) ---
+- name: Download Gitea binary
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    gitea_version: "1.23.7"
+
+  tasks:
+    - name: Download Gitea binary to localhost
+      ansible.builtin.get_url:
+        url: "https://dl.gitea.com/gitea/{{ gitea_version }}/gitea-{{ gitea_version }}-linux-amd64"
+        dest: /tmp/gitea
+        mode: "0755"
+
+# --- Play 7: Install Gitea on disconnected Satellite ---
+- name: Install Gitea on disconnected Satellite
+  hosts: disconnected_satellite
+  become: true
+
+  vars_files:
+    - vars/aws.yml
+    - vars/satellite_resources.yml
+    - vars/disconnected_satellite_resources.yml
+    - ../inventory/group_vars/all.yml
+    - ../inventory/group_vars/disconnected_satellite.yml
+    - ../credentials.yml
+
+  vars:
+    gitea_admin_user: gitea-admin
+    gitea_admin_password: "{{ satellite_admin_password }}"
+    gitea_admin_email: admin@patching-poc.internal
+    gitea_http_port: 3000
+    gitea_org_name: patching-poc
+
+  tasks:
+    - name: Create git system user
+      ansible.builtin.user:
+        name: git
+        system: true
+        shell: /bin/bash
+        home: /home/git
+        create_home: true
+
+    - name: Create Gitea directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: /var/lib/gitea, owner: git, group: git, mode: "0750" }
+        - { path: /var/lib/gitea/custom, owner: git, group: git, mode: "0750" }
+        - { path: /var/lib/gitea/data, owner: git, group: git, mode: "0750" }
+        - { path: /var/lib/gitea/log, owner: git, group: git, mode: "0750" }
+        - { path: /etc/gitea, owner: root, group: git, mode: "0770" }
+
+    - name: Copy Gitea binary to disconnected Satellite
+      ansible.builtin.copy:
+        src: /tmp/gitea
+        dest: /usr/local/bin/gitea
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Set SELinux context for Gitea binary
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - semanage fcontext -a -t bin_t '/usr/local/bin/gitea'
+        - restorecon -v /usr/local/bin/gitea
+      changed_when: true
+      failed_when: false
+
+    - name: Set SELinux context for Gitea data
+      ansible.builtin.command:
+        cmd: "{{ item }}"
+      loop:
+        - semanage fcontext -a -t var_lib_t '/var/lib/gitea(/.*)?'
+        - restorecon -Rv /var/lib/gitea
+      changed_when: true
+      failed_when: false
+
+    - name: Template Gitea configuration
+      ansible.builtin.copy:
+        content: |
+          APP_NAME = Patching POC Git Server
+          RUN_USER = git
+          RUN_MODE = prod
+          WORK_PATH = /var/lib/gitea
+
+          [server]
+          HTTP_PORT = {{ gitea_http_port }}
+          ROOT_URL = http://{{ disconnected_satellite_hostname }}:{{ gitea_http_port }}/
+          DOMAIN = {{ disconnected_satellite_hostname }}
+          SSH_DOMAIN = {{ disconnected_satellite_hostname }}
+          DISABLE_SSH = true
+          OFFLINE_MODE = true
+
+          [database]
+          DB_TYPE = sqlite3
+          PATH = /var/lib/gitea/data/gitea.db
+
+          [service]
+          DISABLE_REGISTRATION = true
+          REQUIRE_SIGNIN_VIEW = false
+          DEFAULT_ALLOW_CREATE_ORGANIZATION = false
+
+          [repository]
+          DEFAULT_BRANCH = main
+          DEFAULT_PRIVATE = public
+
+          [log]
+          MODE = file
+          LEVEL = Info
+          ROOT_PATH = /var/lib/gitea/log
+        dest: /etc/gitea/app.ini
+        owner: root
+        group: git
+        mode: "0640"
+
+    - name: Create Gitea systemd service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Gitea (Git with a cup of tea)
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=git
+          Group=git
+          WorkingDirectory=/var/lib/gitea/
+          ExecStart=/usr/local/bin/gitea web --config /etc/gitea/app.ini
+          Restart=always
+          Environment=USER=git HOME=/home/git GITEA_WORK_DIR=/var/lib/gitea
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/gitea.service
+        mode: "0644"
+
+    - name: Start and enable Gitea
+      ansible.builtin.systemd:
+        name: gitea
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Open firewall port for Gitea
+      ansible.posix.firewalld:
+        port: "{{ gitea_http_port }}/tcp"
+        permanent: true
+        immediate: true
+        state: enabled
+
+    - name: Wait for Gitea to be ready
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gitea_http_port }}/"
+        status_code: [200, 302]
+      register: gitea_ready
+      retries: 15
+      delay: 5
+      until: gitea_ready.status in [200, 302]
+
+    - name: Check if Gitea API is available (setup completed)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gitea_http_port }}/api/v1/settings/api"
+        status_code: [200, 404]
+      register: gitea_api_check
+
+    - name: Prompt to complete Gitea setup via GUI
+      ansible.builtin.fail:
+        msg: |
+          Gitea is running but initial setup has not been completed.
+          Open an SSH tunnel and complete setup in your browser:
+
+            ssh -f -N -L 3000:{{ disconnected_satellite_private_ip }}:3000 \
+              -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null ec2-user@<satellite_public_ip>
+
+          Then browse to http://localhost:3000 and complete the install wizard.
+          Admin user: {{ gitea_admin_user }}
+          Admin email: {{ gitea_admin_email }}
+
+          Re-run this playbook from:
+            --start-at-task="Check if Gitea API is available (setup completed)"
+      when: gitea_api_check.status == 404
+
+    - name: Create patching-poc organization in Gitea
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gitea_http_port }}/api/v1/orgs"
+        method: POST
+        user: "{{ gitea_admin_user }}"
+        password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          username: "{{ gitea_org_name }}"
+          full_name: "Patching POC"
+          visibility: public
+        status_code: [201, 422]
+
+    - name: Create playbooks repository in Gitea
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gitea_http_port }}/api/v1/orgs/{{ gitea_org_name }}/repos"
+        method: POST
+        user: "{{ gitea_admin_user }}"
+        password: "{{ gitea_admin_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: patching-poc-playbooks
+          description: "AAP playbooks for RHEL 10 patching workflow"
+          private: false
+          auto_init: true
+          default_branch: main
+        status_code: [201, 409]
+
+    - name: Display Gitea access info
+      ansible.builtin.debug:
+        msg: |
+          Gitea is running on the disconnected Satellite:
+            Internal URL: http://{{ disconnected_satellite_hostname }}:{{ gitea_http_port }}
+            Admin user:   {{ gitea_admin_user }}
+            Repository:   http://{{ disconnected_satellite_hostname }}:{{ gitea_http_port }}/{{ gitea_org_name }}/patching-poc-playbooks.git
+          To access from desktop, open an SSH tunnel:
+            ssh -f -N -L 3000:{{ disconnected_satellite_private_ip }}:3000 \
+              -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no \
+              -o UserKnownHostsFile=/dev/null ec2-user@<satellite_public_ip>
+            Then browse: http://localhost:3000

@@ -32,6 +32,7 @@ This POC is designed for a **disconnected environment**. The connected Satellite
     |    ISS from connected Satellite                        |
     |    CV RHEL10: Library -> Dev -> QA -> Prod             |
     |    Lightspeed on-prem: Advisor, Vulnerability          |
+    |    Gitea Git server (port 3000) for AAP playbooks      |
     |                                                        |
     |  rhel10-dev / rhel10-qa / rhel10-prod  (RHEL 10.2)    |
     |    Registered to disconnected Satellite only           |
@@ -63,9 +64,9 @@ AAP never reaches the internet at runtime. Everything it needs is either in the 
 | RHEL 10 EUS + AAP 2.7 RPMs | Enable repos on connected Satellite, ISS to disconnected; register AAP with a Satellite activation key (not CDN RHSM)                                                                                                                                                                                   |
 | Execution environments     | Default EEs ship inside the setup bundle; custom EEs built on the connected side with `ansible-builder`, `podman save`, transferred in                                                                                                                                                                  |
 | Ansible collections        | Downloaded on connected side (`ansible-galaxy collection download`), published into **Private Automation Hub** on AAP (`ansible-galaxy collection publish`), then baked into a custom EE or pulled by Controller at project sync. ISS does **not** carry collections — Private Hub is the supply chain. |
-| Playbook project           | Manual/archive upload or a git server inside the VPC. No GitHub.                                                                                                                                                                                                                                        |
+| Playbook project           | Hosted on **Gitea** running on the disconnected Satellite (port 3000). Playbooks are pushed to `http://satellite-disconnected.patching-poc.internal:3000/patching-poc/patching-poc-playbooks.git` and AAP syncs from there.                                                                                |
 | Satellite inventory        | `satellite6` inventory source against the **disconnected** Satellite                                                                                                                                                                                                                                    |
-| Insights / CVE data        | IOP on disconnected Satellite; `cvemap.xml` via playbook 05                                                                                                                                                                                                                                             |
+| Insights / CVE data        | IOP on disconnected Satellite; `cvemap.xml` via playbook 06                                                                                                                                                                                                                                             |
 
 
 
@@ -136,18 +137,35 @@ ansible-playbook playbooks/02-deploy-satellite.yml
 # the Employee SKU and Satellite Infrastructure Subscription are present.
 ansible-playbook playbooks/03-configure-satellite.yml
 
-# Phase 4: Deploy disconnected Satellite with ISS + IOP
+# Phase 4: Deploy disconnected Satellite with ISS + IOP + Gitea
 # Provisions a RHEL 9 m5.2xlarge EC2 instance in the disconnected subnet,
 # installs Satellite, configures ISS Network Sync from the upstream,
 # enables/syncs RHEL 10 repos via ISS, exports/loads IOP container images,
-# and creates the ak-aap activation key for AAP registration.
+# creates the ak-aap activation key, and installs Gitea for hosting
+# AAP playbook projects inside the disconnected network.
+# The playbook will pause to let you complete Gitea's initial setup via GUI.
 ansible-playbook playbooks/04-deploy-disconnected-satellite.yml
+
+# After the playbook pauses for Gitea setup, open an SSH tunnel:
+#   ssh -f -N -L 3000:<disconnected_sat_private_ip>:3000 \
+#     -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no \
+#     -o UserKnownHostsFile=/dev/null ec2-user@<satellite_public_ip>
+# Browse to http://localhost:3000 and complete the install wizard.
+# Then re-run:
+#   ansible-playbook playbooks/04-deploy-disconnected-satellite.yml \
+#     --start-at-task="Check if Gitea API is available (setup completed)"
 
 # Phase 5: Configure RHEL10 content on disconnected Satellite
 # Creates Dev/QA/Prod lifecycle environments, RHEL10 Content View with
 # errata filters, publishes and promotes CV versions, creates activation
 # keys and host groups. This is where patching content management lives.
+# Before running, open an SSH tunnel to the disconnected Satellite API:
+#   ssh -f -N -L 14443:<disconnected_sat_private_ip>:443 \
+#     -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no \
+#     -o UserKnownHostsFile=/dev/null ec2-user@<satellite_public_ip>
 ansible-playbook playbooks/05-configure-disconnected-content.yml
+# Close the tunnel when done:
+#   kill $(lsof -ti tcp:14443) 2>/dev/null
 
 # Phase 6: Sync Lightspeed vulnerability data (cvemap.xml)
 # Transfers CVE data from connected Satellite to disconnected Satellite.
@@ -164,9 +182,14 @@ ansible-playbook playbooks/07-deploy-aap.yml
 ansible-playbook playbooks/08-provision-vms.yml
 
 # Phase 9: Configure AAP Workflow
-# Before running, open an SSH tunnel for the AAP API:
-#   ssh -f -N -L 8443:<aap_private_ip>:443 ec2-user@<satellite_public_ip>
+# Before running, open an SSH tunnel to the AAP API:
+#   ssh -f -N -L 8443:<aap_private_ip>:443 \
+#     -i ~/.ssh/patching-poc.pem -o StrictHostKeyChecking=no \
+#     -o UserKnownHostsFile=/dev/null ec2-user@<satellite_public_ip>
+# Verify with: curl -sk https://localhost:8443/api/gateway/v1/ping/
 ansible-playbook playbooks/09-configure-aap-workflow.yml
+# Close the tunnel when done:
+#   kill $(lsof -ti tcp:8443) 2>/dev/null
 ```
 
 
@@ -300,7 +323,7 @@ Patching-POC/
 │       ├── satellite.yml
 │       └── disconnected_satellite.yml
 ├── playbooks/
-│   ├── 01-deploy-aap.yml
+│   ├── 01-provision-networking.yml
 │   ├── 02-deploy-satellite.yml
 │   ├── 03-configure-satellite.yml
 │   ├── 04-deploy-disconnected-satellite.yml
@@ -309,7 +332,8 @@ Patching-POC/
 │   ├── 07-deploy-aap.yml
 │   ├── 08-provision-vms.yml
 │   ├── 09-configure-aap-workflow.yml
-│   ├── publish_promote_downstream.yml
+│   ├── tasks/
+│   │   └── publish_promote_downstream.yml
 │   ├── patch-publish-cv.yml
 │   ├── patch-promote.yml
 │   ├── patch-apply.yml
@@ -318,7 +342,8 @@ Patching-POC/
 │       ├── aws.yml
 │       ├── aws_resources.yml                     (auto-generated by 01)
 │       ├── satellite_resources.yml               (auto-generated by 02)
-│       └── disconnected_satellite_resources.yml  (auto-generated by 04)
+│       ├── disconnected_satellite_resources.yml  (auto-generated by 04)
+│       └── aap_resources.yml                     (auto-generated by 07)
 ├── roles/
 │   ├── aap_bootstrap/
 │   ├── satellite_deploy/

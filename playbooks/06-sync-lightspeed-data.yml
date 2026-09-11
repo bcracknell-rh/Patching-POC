@@ -27,16 +27,18 @@
         ansible_ssh_private_key_file: "~/.ssh/{{ aws_key_name }}.pem"
         ansible_ssh_common_args: "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
-    - name: Generate SSH config for disconnected subnet access
-      ansible.builtin.copy:
-        content: |
+    - name: Ensure disconnected Satellite in SSH config
+      ansible.builtin.blockinfile:
+        path: "{{ playbook_dir }}/.ssh_config_disconnected"
+        marker: "# {mark} MANAGED BLOCK {{ disconnected_satellite_private_ip }}"
+        block: |
           Host {{ disconnected_satellite_private_ip }}
             User ec2-user
             IdentityFile ~/.ssh/{{ aws_key_name }}.pem
             StrictHostKeyChecking no
             UserKnownHostsFile /dev/null
             ProxyCommand ssh -i ~/.ssh/{{ aws_key_name }}.pem -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -W %h:%p ec2-user@{{ satellite_public_ip }}
-        dest: "{{ playbook_dir }}/.ssh_config_disconnected"
+        create: true
         mode: "0600"
 
     - name: Add disconnected Satellite to in-memory inventory

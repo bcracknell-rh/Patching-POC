@@ -74,10 +74,10 @@
       register: aap_instance
 
     - name: Add AAP host entry to SSH config for disconnected subnet
-      ansible.builtin.lineinfile:
+      ansible.builtin.blockinfile:
         path: "{{ playbook_dir }}/.ssh_config_disconnected"
-        line: |
-
+        marker: "# {mark} MANAGED BLOCK {{ aap_instance.instances[0].private_ip_address }}"
+        block: |
           Host {{ aap_instance.instances[0].private_ip_address }}
             User ec2-user
             IdentityFile ~/.ssh/{{ aws_key_name }}.pem
